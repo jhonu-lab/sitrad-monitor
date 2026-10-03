@@ -1,0 +1,32 @@
+{
+  "_comment": "Copia este archivo a config.json y rellena tus valores.",
+  "_comment_mode": "'demo' usa el simulador local. 'production' usa Sitrad real.",
+
+  "mode": "demo",
+
+  "sitrad": {
+    "demo_host": "http://127.0.0.1:8001/api",
+    "production_host": "https://localhost:8001/api",
+    "verify_ssl": false,
+    "timeout": 5
+  },
+
+  "polling": {
+    "interval_seconds": 2
+  },
+
+  "rules": {
+    "cooldown_seconds": 30,
+    "required_consecutive": 2,
+    "critical_deviation_multiplier": 2.0
+  },
+
+  "notifiers": {
+    "console": true,
+    "file_log": true,
+    "telegram": false,
+    "telegram_token": "REEMPLAZA_CON_TU_TOKEN",
+    "telegram_chat_id": "REEMPLAZA_CON_TU_CHAT_ID",
+    "allowed_chat_ids": []
+  }
+}
