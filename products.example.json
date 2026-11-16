@@ -1,0 +1,11 @@
+{
+ "products": {
+  "ternera": {"max_temp_c": 4,  "max_minutes_above": 120, "aliases": ["res", "carne de res"]},
+  "pollo":   {"max_temp_c": 4,  "max_minutes_above": 120},
+  "leche":   {"max_temp_c": 4,  "max_minutes_above": 60},
+  "suero":   {"max_temp_c": 12, "max_minutes_above": 0}
+ },
+ "loads": [
+  {"product": "suero", "kg": 800, "t_in": "2026-10-13T12:00:00-05:00", "entry_temp_c": 8}
+ ]
+}

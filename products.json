@@ -1,0 +1,14 @@
+{
+ "products": {},
+ "loads": [
+  {
+   "id": "a2fe4cb1",
+   "product": "ternera",
+   "kg": 500.0,
+   "t_in": "2026-11-05T15:00:31.930589+00:00",
+   "t_out": null,
+   "entry_temp_c": null,
+   "note": ""
+  }
+ ]
+}

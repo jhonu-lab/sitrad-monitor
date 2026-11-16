@@ -1,0 +1,11 @@
+# Pruebas manuales (con la cava)
+- [ ] `python tools/inspect_sitrad_api.py` → 23 canales mapeados, 20 efectivos, 3 con ⚠ (Puerta, Evaporador y el implausible/deshabilitado).
+- [ ] Arranque: log `FileLog replay: N lecturas`.
+- [ ] «qué historia tienes» → rango y horas reales.
+- [ ] «cómo estuvo la cava ayer» → datos si hubo; «…la semana pasada» → «Solo tengo datos desde…».
+- [ ] «episodios de esta semana» y «resumen de episodios» → lista / por causa y tiempo total.
+- [ ] «hazme un gráfico de temperatura y compresor» → PNG 2 series; con «y episodios» → marcas verticales.
+- [ ] «calidad de los datos» → cobertura por canal; Puerta 0 % (deshabilitado).
+- [ ] «promedio de temperatura por día» → una fila por día; «exporta la temperatura de ayer a CSV» → archivo en `logs/exports/`.
+- [ ] «hay algún problema» → «sin Multipower: diagnóstico parcial» y `[AVISO] Datalogger al 100%`.
+- [ ] Modo demo: `qué instrumentos tienes` menciona Multipower; `hazme un gráfico` genera PNG.

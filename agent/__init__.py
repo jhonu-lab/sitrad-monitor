@@ -1,0 +1,1 @@
+"""Paquete del agente contextual (motor determinista + LLM)."""

@@ -1,0 +1,2230 @@
+{
+ "instruments": [
+  {
+   "instrument": {
+    "id": 1,
+    "converterId": 2,
+    "name": "TC-900E Log [009]",
+    "address": 9,
+    "statusId": 1,
+    "status": "Active",
+    "modelId": 72,
+    "modelVersion": 4,
+    "isAlarmsManuallyInhibited": false
+   },
+   "values": [
+    {
+     "code": "FncCompressorActivatedTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncCompressorDeactivatedTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncFanStopTemperature",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 50,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncOffsetSensor1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0.3,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncOffset2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -50.1,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncOffset3",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeManut",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 36,
+       "measurementUnity": "hor"
+      }
+     ]
+    },
+    {
+     "code": "IsAlrExternalPressure1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrExternalPressure2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrHighPressure",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrLowPressure",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrHighPressureTrip",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrLowPressureTrip",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncDefrostSchedule",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncRefrigerationTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 360,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncModeDigitalInput1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncModeDigitalInput2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTimeToConfirmHighPressAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 5,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeToConfirmLowPressAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 20,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncInitialDelayLowPressAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 60,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncDelayAfterHighPressAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 3,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncDelayAfterLowPressAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 3,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "HasControlCommand",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncAlarmInhibitionTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncShutdownEn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 3,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTemperatureValidationTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncOperatingMode",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncDifferential",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncMinSetpoint",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -50,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncMaxSetpoint",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 105,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncStartDelayTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncSensor1LowAlarmLimit",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -10,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncSensor1HighAlarmLimit",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 12,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncCompressorStatusS1Disconnected",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncDefrostOnStart",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncEndDefrostTemperature",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 30,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncMaxDefrostDuration",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 15,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncFanEnabledOnDefrost",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncDefrostType",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncLockSensor",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncDrainTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncFanReactivationTemperature",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 20,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncFanMaxDelayTimer",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncFanWithCompressor",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncAddressRS485",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 9,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncNumberDefrostsWeek",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTimeDefrostWeek",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 36,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncNumberDefrostsSaturday",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTimeDefrostSaturday",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 36,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncNumberDefrostsSunday",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTimeDefrostSunday",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 36,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncNormalSetpoint",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -2,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncEconomicSetpoint",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -10,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncDifferential2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 2,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncDoorTimeEcoOn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncDifTempEcoOn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 2,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncDifTempEcoOff",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 5,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncMaxTimeEco",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 36,
+       "measurementUnity": "hor"
+      }
+     ]
+    },
+    {
+     "code": "FncTempLimitForFastFreezing",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -25,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncMaxTimeOfFastFreezing",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeFanOn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 2,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeFanOff",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 8,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeCompressorOnCaseFailure",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeCompressorOffCaseFailure",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeCollectionGas",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncConditionToStartDefrosting",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncTimeOpenDoorForDefrost",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncEvaporatorTemptDefrosting",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -50,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncDoorTimeFanOff",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncDoorTimeComoOff",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncAlarmTempMaxCondenser",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 55,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncAlarmControlDifferential",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 5,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncTimeMaxCompON",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncAlarmHighTemperature",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 45,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "FncOpenDoorTimeBuzz",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 35,
+       "measurementUnity": "min"
+      }
+     ]
+    },
+    {
+     "code": "FncBuzzEnable",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false
+      }
+     ]
+    },
+    {
+     "code": "FncTempFilter",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncKeyLock",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "FncKeyTimeLock",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 15,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 34,
+       "measurementUnity": "sec"
+      }
+     ]
+    },
+    {
+     "code": "FncModeOpAlarm",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Sensor1",
+     "name": "Ambiente",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 24.5,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "Sensor2",
+     "name": "Evaporador",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -112.2,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": false,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "Sensor3",
+     "name": "Sensor 3",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -62,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": false,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "Day",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 3,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Month",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 11,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Year",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 2026,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Hour",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 15,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Minute",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 50,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Second",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 11,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "TemperatureUnityType",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 1,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "Hourmeter",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 5531,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "ProcessStatusText",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": "Refrigeración",
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "ProcessStatus",
+     "name": "Proceso actual",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 7,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsCurrentSetpointEnabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "CurrentSetpoint",
+     "name": "Setpoint actual",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": -2,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "CurrentDifferential",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "IsFastFreezingActive",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsEconomicModeActive",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "EnableFastFreezing",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "EnableModeEconomic",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "DataloggerOn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDataloggerFull",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "DataloggerAlreadyOverwrote",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsBrokenDatalogger",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAbleFastFreezing",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAbleEconomicMode",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrHighTempS1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrLowTempS1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrmS3AC1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrmS3AC2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrmDoorOpn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlrmExt",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsCompMaxTOn",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDefrTimeOut",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlarmS3High",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsErrorS1",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsErrorS2",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsErrorS3",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsS2Enabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsS3Enabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsClockDeprogrammed",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDeprogrammed",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsAlarmMaintenance",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOutputRefr",
+     "name": "Salida REFR",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOutputFan",
+     "name": "Salida FANS",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOutputDefr1",
+     "name": "Salida DEFR",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOutputBuzzer",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDig1",
+     "name": "Entrada Digital 1",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": false,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDig2",
+     "name": "Entrada Digital 2",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": false,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOpenDoor",
+     "name": "Puerta abierta",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": false,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "SetpointRelativeTemp",
+     "name": "Desvío relativo al Setpoint",
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 26.5,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 1,
+       "measurementUnity": "°C"
+      }
+     ]
+    },
+    {
+     "code": "IsDig1Enabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsDig2Enabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsOpenDoorEnabled",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "HasDefrostCommand",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "ProcessTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": "PT6M",
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "InternalRtc",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": "/Date(1793739011000-0500)/",
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "ScheduleProgrammationMode",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 0,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "EventsPerDay",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 4,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "HasDefrostSchedule",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": false,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "IsManualDatalogger",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": true,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    },
+    {
+     "code": "DataloggerPercentUsage",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": 100,
+       "decimalPlaces": 1,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnityId": 30,
+       "measurementUnity": "%"
+      }
+     ]
+    },
+    {
+     "code": "RemainingInhibitionTime",
+     "name": null,
+     "values": [
+      {
+       "date": "2026-11-03T20:50:11Z",
+       "value": null,
+       "decimalPlaces": 0,
+       "isInError": false,
+       "isEnabled": true,
+       "isFailPayload": false,
+       "measurementUnity": ""
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "alarms": [
+  {
+   "id": 34,
+   "instrumentId": 1,
+   "code": "AlarmClockDeprogrammedError",
+   "description": "Reloj Desprogramado",
+   "value": "true",
+   "startDate": "2026-11-03T20:45:47Z",
+   "isFinalized": true,
+   "isInhibited": false,
+   "isRecognized": false,
+   "endDate": "2026-11-03T20:45:49Z"
+  }
+ ]
+}
