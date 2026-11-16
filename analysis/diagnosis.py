@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import mean, median
 from typing import Any
-
+from core.contracts import ChannelReading, DataQuality
 
 try:
     from core.channel_catalog import ALL_SPECS, ROLE_TO_CHANNEL
