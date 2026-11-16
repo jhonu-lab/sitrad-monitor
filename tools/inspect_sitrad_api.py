@@ -222,7 +222,30 @@ def main() -> int:
             print(f"  {r.status_code}  {path}{extra}")
         except Exception as exc:
             print(f"  ERR {path}: {exc}")
-
+    # --- árbol de convertidores → instrumentos → canales (si el endpoint /converters existe) ---
+    try:
+        from sources.sitrad_api import SitradApiSource
+        src = SitradApiSource(api, device_id=1, channel_map=sc.get("channel_map"))
+        tree = src.discover_all()
+        print("\n== ÁRBOL SITRAD ==")
+        print(f"Convertidores: {tree['n_converters']} · Instrumentos: {tree['n_instruments']} · "
+            f"Canales efectivos: {tree['n_channels_effective']}/{tree['n_channels_total']}")
+        for c in tree["converters"]:
+            print(f"\nConvertidor {c['name']} (id {c['id']}, {c['status'] or '?'}):")
+            for ins in c["instruments"]:
+                print(f"  · {ins['name']} (id {ins['id']}) — "
+                    f"{ins['n_channels_effective']}/{ins['n_channels_total']} canales efectivos")
+                for ch in ins["channels"]:
+                    mark = "✓" if ch["accepted"] else "⚠"
+                    extra = "" if ch["accepted"] else f"  [{ch['reason']}]"
+                    print(f"      {mark} {ch['canal']:<22} = {ch['value']!r:<18} {ch['unit'] or ''}{extra}")
+        if tree["unassigned_instruments"]:
+            print(f"\nSin convertidor: {len(tree['unassigned_instruments'])} instrumento(s)")
+            for ins in tree["unassigned_instruments"]:
+                print(f"  · {ins['name']} (id {ins['id']}) — "
+                    f"{ins['n_channels_effective']}/{ins['n_channels_total']} canales")
+    except Exception as exc:
+        print(f"\n(no pude construir el árbol SITRAD: {exc})")
     return 0 if not missing else 2
 
 

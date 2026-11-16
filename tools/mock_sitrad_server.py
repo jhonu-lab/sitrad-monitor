@@ -26,7 +26,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 sys.path.insert(0, ".")
 from simulation.excel_replay import load_sitrad_table

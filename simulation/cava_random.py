@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from core.contracts import ChannelReading, DataQuality, Snapshot
-from core.channel_catalog import ALL_SPECS, CONTROLLER_SPECS, channels_config  # noqa: F401
+from core.channel_catalog import ALL_SPECS, CONTROLLER_SPECS  # noqa: F401
 import logging
 logger = logging.getLogger(__name__)
 

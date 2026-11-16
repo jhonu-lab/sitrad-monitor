@@ -49,7 +49,6 @@ def test_time_ranges():
 
 
 def test_episode_history_record_query_summary(tmp_path):
-    from types import SimpleNamespace
     h = EpisodeHistory(str(tmp_path / "e.jsonl"))
     rec = {"id": "a", "canal": "Temp Cámara", "start": T0.isoformat(), "end": (T0 + timedelta(minutes=30)).isoformat(),
            "peak_c": 6.0, "prev_c": 2.0, "above_min": 30.0, "kind": "puerta", "kind_label": "puerta abierta",

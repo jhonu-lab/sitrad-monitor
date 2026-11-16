@@ -28,7 +28,7 @@ import re
 import sys
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -159,7 +159,6 @@ def resolve_credentials(cfg: dict) -> tuple[str, str]:
                          "en una terminal para que las pregunte.")
     return user, pwd
 
-
 class SitradApi:
     def __init__(self, base_url: str, user: str, password: str, verify_ssl: bool = False,
                  timeout: float = 30.0) -> None:
@@ -168,6 +167,7 @@ class SitradApi:
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(user, password)
         self.session.verify = bool(verify_ssl)
+
         if not verify_ssl:
             # Certificado local autofirmado de SITRAD: no se valida (en producción, configura el certificado).
             from urllib3.exceptions import InsecureRequestWarning
@@ -183,7 +183,26 @@ class SitradApi:
         if isinstance(data, dict) and data.get("status") not in (None, 200):
             raise RuntimeError(f"Respuesta inesperada de SITRAD: {str(data)[:200]}")
         return data
+    def converters(self) -> list[dict]:
+        """Convertidores RS-485/RS-232 configurados en SITRAD.
+        Prueba varios endpoints y devuelve [] si ninguno responde (SITRAD PRO
+        de esta instalación no siempre expone /converters)."""
+        for path in ("/converters", "/converter", "/instruments/converters"):
+            try:
+                return list(self.get_json(path).get("results", []))
+            except Exception:
+                continue
+        return []
 
+    def alarms_of(self, instrument_id) -> list[dict]:
+        """Alarmas configuradas de un instrumento (si el endpoint existe)."""
+        for path in (f"/instruments/{instrument_id}/alarms",
+                    f"/instruments/{instrument_id}/alarms/config"):
+            try:
+                return list(self.get_json(path).get("results", []))
+            except Exception:
+                continue
+        return []
     def instruments(self) -> list[dict]:
         return list(self.get_json("/instruments").get("results", []))
 
@@ -226,6 +245,7 @@ def describe_alarm(alarm: dict) -> dict:
 # ----------------------------------------------------------------------
 
 class SitradApiSource:
+    
     """Misma interfaz que CavaRandomSource: poll(now) -> Snapshot."""
 
     def __init__(self, api: SitradApi, device_id: int, instrument_id=None, instrument_name: str | None = None,
@@ -249,9 +269,28 @@ class SitradApiSource:
         self._alarm_primed = False
         self._last_alarm_fetch: datetime | None = None
         self.instrument: dict | None = None
+        self.alarms_path = Path(data_dir) / "sitrad_alarms.jsonl"
         if save_raw:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-
+        
+    def _save_alarm(self, alarm: dict, raw: dict) -> None:
+        """Persiste la alarma en logs/sitrad_alarms.jsonl (append-only, para consultas históricas)."""
+        import json
+        from datetime import datetime, timezone
+        rec = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "id": alarm.get("id"),
+            "instrument": alarm.get("instrument"),
+            "text": alarm.get("text"),
+            "when": alarm["when"].isoformat() if alarm.get("when") else None,
+            "raw": raw,
+        }
+        try:
+            self.alarms_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.alarms_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            logger.exception("No pude persistir la alarma.")
     # ---- descubrimiento ----
     def discover(self) -> dict:
         """Elige el instrumento del controlador. Lanza RuntimeError con una explicación si no puede."""
@@ -348,7 +387,141 @@ class SitradApiSource:
             self._last_ts[ch] = t
             out.append(self._reading(ch, v, t, flags))
         return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
+    def _would_accept(self, ch: str, v: Variable, sensor_flags: dict | None) -> tuple[bool, str]:
+        """Misma lógica que _reading pero devolviendo (aceptada, razón_si_no). Sin construir ChannelReading."""
+        spec = self._spec.get(ch)
+        if spec is None:
+            return False, "canal no catalogado"
+        if not v.enabled:
+            return False, "deshabilitado en SITRAD"
+        idx = SENSOR_INDEX.get(ch)
+        if idx is not None and sensor_flags and sensor_flags.get(idx) is False:
+            return False, f"sensor S{idx} deshabilitado"
+        if spec.kind == "analog" and spec.unit == "°C":
+            x = parse_number(v.value)
+            if x is not None and not (TEMP_PLAUSIBLE[0] <= x <= TEMP_PLAUSIBLE[1]):
+                return False, "fuera de rango físico"
+        return True, ""
 
+    def discover_all(self) -> dict:
+        """Árbol completo SITRAD: convertidores → instrumentos → canales.
+
+        No selecciona ni cambia el instrumento activo: es informativo. Pensado para
+        la tool list_converters y para el log de arranque. Tolerante a fallos:
+        cada instrumento que no responda se anota con error y el resto sigue.
+        """
+        tree: dict = {"converters": [], "unassigned_instruments": []}
+
+        # 1. Convertidores (si el endpoint existe)
+        try:
+            raw_convs = self.api.converters()
+        except Exception:
+            raw_convs = []
+        by_conv: dict[str, dict] = {}
+        for c in raw_convs:
+            cid = str(c.get("id", ""))
+            if not cid:
+                continue
+            by_conv[cid] = {
+                "id": cid,
+                "name": c.get("name") or c.get("description") or f"Convertidor {cid}",
+                "address": c.get("address"),
+                "status": c.get("status"),
+                "instruments": [],
+            }
+
+        # 2. Instrumentos
+        try:
+            instruments = self.api.instruments()
+        except Exception as exc:
+            logger.warning("discover_all: no pude listar instrumentos: %s", exc)
+            instruments = []
+
+        for ins in instruments:
+            ins_id = ins.get("id")
+            ins_name = ins.get("name") or f"Instrumento {ins_id}"
+            conv_id = ins.get("converterId")
+            conv_id = None if conv_id in (None, 0, "0", "") else str(conv_id)
+
+            channels: list[dict] = []
+            unmapped: list[str] = []
+            n_vars = 0
+            try:
+                raw = self.api.values(ins_id)
+                vs = list(iter_variables(raw))
+                n_vars = len(vs)
+                mapped = map_variables(vs, self.channel_map)
+                flags = sensor_enabled_flags(vs)
+                for ch, v in mapped.items():
+                    ok, why = self._would_accept(ch, v, flags)
+                    channels.append({
+                        "canal": ch,
+                        "variable": v.name,
+                        "unit": v.unit,
+                        "value": v.value,
+                        "enabled": v.enabled,
+                        "accepted": ok,
+                        "reason": why,
+                    })
+                mapped_names = {c["variable"] for c in channels}
+                unmapped = sorted(v.name for v in vs if v.name not in mapped_names)
+            except Exception as exc:
+                logger.warning("discover_all: no pude leer %s (id=%s): %s", ins_name, ins_id, exc)
+
+            entry = {
+                "id": ins_id,
+                "name": ins_name,
+                "model": ins.get("modelId") or ins.get("modelVersion") or "",
+                "status": ins.get("status"),
+                "address": ins.get("address"),
+                "converterId": conv_id,
+                "channels": channels,
+                "n_channels_total": len(channels),
+                "n_channels_effective": sum(1 for c in channels if c["accepted"]),
+                "n_variables_total": n_vars,
+                "unmapped_sample": unmapped[:15],
+            }
+
+            # ─── BLOQUE 3.2: catálogo de alarmas del instrumento ───
+            alarm_channels = [
+                {"canal": ch, "variable": v.name,
+                "active": bool(parse_number(v.value)) if v.value is not None else None}
+                for ch, v in mapped.items()
+                if ch.startswith(("Alarma ", "Error Sensor"))
+            ]
+            entry["alarm_channels"] = alarm_channels
+            entry["n_alarm_channels"] = len(alarm_channels)
+
+            try:
+                raw_alarms = self.api.get_json(f"/instruments/{ins_id}/alarms").get("results", [])
+                entry["alarm_catalog"] = [
+                    {"code": a.get("code"), "description": a.get("description"),
+                    "inhibited": a.get("isInhibited"), "recognized": a.get("isRecognized")}
+                    for a in raw_alarms
+                ]
+            except Exception:
+                entry["alarm_catalog"] = []          # endpoint no disponible en esta versión de SITRAD
+            # ─── FIN BLOQUE 3.2 ───
+
+            if conv_id and conv_id in by_conv:
+                by_conv[conv_id]["instruments"].append(entry)
+            else:
+                tree["unassigned_instruments"].append(entry)
+            
+
+        tree["converters"] = list(by_conv.values())
+        tree["n_converters"] = len(tree["converters"])
+        tree["n_instruments"] = len(instruments)
+        tree["n_channels_total"] = (
+            sum(len(i["channels"]) for c in tree["converters"] for i in c["instruments"])
+            + sum(len(i["channels"]) for i in tree["unassigned_instruments"])
+        )
+        tree["n_channels_effective"] = (
+            sum(i["n_channels_effective"] for c in tree["converters"] for i in c["instruments"])
+            + sum(i["n_channels_effective"] for i in tree["unassigned_instruments"])
+        )
+        return tree
+    
     # ---- alarmas ----
     def new_alarms(self, now: datetime) -> list[dict]:
         """Alarmas de SITRAD que no se habían entregado (descripción en lenguaje simple)."""
@@ -366,6 +539,7 @@ class SitradApiSource:
             if aid in self._alarm_seen:
                 continue
             self._alarm_seen.add(aid)
+            self._save_alarm(describe_alarm(a), a)
             fresh.append(describe_alarm(a))
         if not self._alarm_primed:
             self._alarm_primed = True

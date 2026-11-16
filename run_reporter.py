@@ -341,6 +341,27 @@ def main() -> None:
         )
         try:
             source.discover()
+            if mode == "sitrad" and hasattr(source, "discover_all"):
+                try:
+                    tree = source.discover_all()
+                    logger.info(
+                        "SITRAD: %d convertidor(es), %d instrumento(s), %d/%d canales efectivos.",
+                        tree.get("n_converters", 0),
+                        tree.get("n_instruments", 0),
+                        tree.get("n_channels_effective", 0),
+                        tree.get("n_channels_total", 0),
+                    )
+                    for c in tree.get("converters", []):
+                        for ins in c.get("instruments", []):
+                            logger.info("  · convertidor %s → %s (id=%s, %d canales)",
+                                        c.get("name"), ins.get("name"), ins.get("id"),
+                                        ins.get("n_channels_effective", 0))
+                    for ins in tree.get("unassigned_instruments", []):
+                        logger.info("  · (sin convertidor) %s (id=%s, %d canales)",
+                                    ins.get("name"), ins.get("id"),
+                                    ins.get("n_channels_effective", 0))
+                except Exception:
+                    logger.exception("Descubrimiento SITRAD falló; sigo con el instrumento configurado.")
         except Exception as exc:
             raise SystemExit(f"ERROR al conectar con SITRAD: {exc}")
 
@@ -572,8 +593,10 @@ def main() -> None:
     agent.channel_aliases = cfg.get("channel_aliases", {})
     # La fuente SITRAD solo mapea canales del controlador: nunca hay Multipower. En demo/simulación
     # el store está vacío al arrancar, así que NO se deduce de él (daría False): se deja None.
-    if mode == "sitrad":  
+    if mode == "sitrad":
         agent.multipower_present = False
+        if hasattr(source, "discover_all"):
+            agent.discovery_provider = source.discover_all
 
     logger.info(
         "Memoria de conversación: %s (aliases=%d).",

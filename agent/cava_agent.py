@@ -486,7 +486,76 @@ class CavaAgent:
         # --------------------------------------------------------
         # LIST CHANNELS
         # --------------------------------------------------------
+        {
+        "type": "function",
+        "function": {
+            "name": "list_converters",
+            "description": (
+                "Lista los convertidores SITRAD con sus instrumentos y los canales "
+                "de cada instrumento (incluye los descartados y por qué). "
+                "Úsala para 'qué hardware hay conectado', 'qué convertidores tienes', "
+                "'qué mide cada equipo' o cuando el usuario pregunte por un canal "
+                "que no está en la lista del instrumento activo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "refresh": {"type": "boolean",
+                                "description": "Si true, vuelve a consultar SITRAD en vez de usar la caché."},
+                },
+                "required": [],
+            },
+        },
+    },
 
+
+            {
+            "type": "function",
+            "function": {
+                "name": "alarm_history",
+                "description": (
+                    "Alarmas registradas por SITRAD entre dos fechas, opcionalmente "
+                    "filtradas por instrumento o por código/texto. Úsala para "
+                    "'cuántas alarmas ha tenido', 'qué alarmas saltaron ayer', "
+                    "'cuándo fue la última alarma de puerta'."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "desde": {"type": "string", "description": "ISO 8601 (por defecto, hace 7 días)."},
+                        "hasta": {"type": "string", "description": "ISO 8601 (por defecto, ahora)."},
+                        "instrumento": {"type": "string",
+                                        "description": "Filtra por nombre de instrumento (substring)."},
+                        "codigo": {"type": "string",
+                                   "description": "Filtra por código o texto de alarma (substring)."},
+                    },
+                    "required": [],
+                },
+            },
+        },
+
+
+                {
+            "type": "function",
+            "function": {
+                "name": "correlate_with_alarms",
+                "description": (
+                    "Cruza las variaciones de un canal con las alarmas de SITRAD en la "
+                    "misma ventana. Úsala para 'las subidas coinciden con alarmas', "
+                    "'la alarma de puerta explica los picos', 'hay relación entre "
+                    "deshielo y alarmas de timeout'."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "canal": {"type": "string", "description": "Nombre exacto del canal."},
+                        "desde": {"type": "string"},
+                        "hasta": {"type": "string"},
+                    },
+                    "required": ["canal"],
+                },
+            },
+        },
         {
             "type": "function",
             "function": {
@@ -1699,12 +1768,16 @@ class CavaAgent:
         if u.startswith("d"):
             return v * 1440.0
         return v
-
     def _route_question(self, question: str) -> str | None:
         if not self.use_router:
             return None
         q = self._norm(question)
         parts: list[str] = []
+
+        # Hora y rango relativos ("ayer", "esta semana"): los usan el bloque de
+        # alarmas, el de gráficos y el de episodios. Se calculan aquí una vez.
+        now_utc = self._now()
+        rng = parse_time_range(q, now_utc, self._tz_name())
 
         def has(*words):
             return any(w in q for w in words)
@@ -1722,19 +1795,40 @@ class CavaAgent:
             fb_reply = self._handle_feedback_message(question)
             if fb_reply is not None:
                 return fb_reply
+                        # Alarmas de SITRAD: histórico filtrable
+            if has("alarma", "alarmas", "ha saltado", "se disparó", "se disparo",
+                   "cuántas alarmas", "cuantas alarmas"):
+                a0, a1 = (rng[0], rng[1]) if rng else (now_utc - timedelta(days=7), now_utc)
+                args: dict = {"desde": a0.isoformat(), "hasta": a1.isoformat()}
+                if has("puerta"):
+                    args["codigo"] = "door"
+                elif has("temperatura", "temp"):
+                    args["codigo"] = "temp"
+                elif has("presión", "presion"):
+                    args["codigo"] = "pressure"
+                r = _ex("alarm_history", args)
+                parts.append(r.get("respuesta_base") or r.get("error")
+                             or "No pude leer el histórico de alarmas.")
+
+            # Correlación de variaciones con alarmas (independiente del anterior)
+            if has("coincide", "coinciden", "correlacion con alarmas",
+                   "relacion con alarmas", "subidas con alarmas"):
+                chs = self._channels_in(q) or ["Temp Cámara"]
+                a0, a1 = (rng[0], rng[1]) if rng else (now_utc - timedelta(days=7), now_utc)
+                r = _ex("correlate_with_alarms",
+                        {"canal": chs[0], "desde": a0.isoformat(), "hasta": a1.isoformat()})
+                parts.append(r.get("respuesta_base") or r.get("error")
+                             or "No pude cruzar las variaciones con alarmas.")
             if _CHART_ASK.search(q) and not has("tabla"):
                 chs = self._channels_in(q) or ["Temp Cámara"]
                 args = {"canales": chs, "minutos": self._window_minutes(q, 60.0),
                         "marcar_episodios": has("episodio")}
-                rng = parse_time_range(q, self._now(), self._tz_name())
                 if rng and not re.search(r"\d+\s*(horas?|hs?|minutos?|mins?)", q):
                     args.update(desde=rng[0].isoformat(), hasta=rng[1].isoformat())
                 res = self._execute_tool("render_chart", args)
                 if isinstance(res, dict) and res.get("ok"):
                     return {"__photo__": res["photo_path"], "caption": res["caption"]}
                 return CHART_UNAVAILABLE
-            now_utc = self._now()
-            rng = parse_time_range(q, now_utc, self._tz_name())
             if has("que historia tienes", "desde cuando tienes datos", "cuantos datos tienes", "cuanta historia",
                    "desde cuando hay datos"):
                 return self._execute_tool("history_coverage", {}).get("respuesta_base")
@@ -1869,9 +1963,15 @@ class CavaAgent:
                    "estan conectados", "estado de la comunicacion"):
                 r = _ex("diagnose_now", {"minutos": 360})
                 parts.append(self._render_instrument_status(r))
-            if has("que instrumentos", "que canales hay", "que canales tienes",
-                   "que variables", "cuales instrumentos", "instrumentos tienes"):
-                parts.append(self._render_instruments())
+            if has("convertidor", "convertidores", "que hardware", "que equipos",
+                "que hay conectado", "que instrumentos", "que canales hay",
+                "que canales tiene", "que variables", "cuales instrumentos",
+                "instrumentos tiene", "que mide cada"):
+                r = _ex("list_converters", {"refresh": has("ahora", "actualiza", "refresh", "vuelve a")})
+                txt = r.get("respuesta_base") if r.get("ok") else (r.get("error") or "")
+                if not txt:
+                    txt = self._render_instruments()   # fallback al método actual
+                parts.append(txt)
             if (has("temperatura actual", "temperatura de la cava", "temperatura de la camara")
                     and not parts):
                 r = _ex("status_report", {"breve": True})
@@ -2076,18 +2176,7 @@ class CavaAgent:
     # ============================================================
     # EJECUTOR DE HERRAMIENTAS
     # ============================================================
-
-    def _execute_tool(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Ejecuta la herramienta y añade la antigüedad de los datos.
-
-        Las ventanas de SeriesStore se anclan a la ÚLTIMA lectura de cada
-        canal, no a "ahora". Sin este dato, un canal que dejó de reportar
-        hace horas responde "últimos 30 min" con datos viejos sin avisar.
-        """
+    def _execute_tool(self, name, arguments):
         arguments = self._normalize_arguments(name, arguments)
         result = self._execute_tool_raw(name, arguments)
         try:
@@ -2606,7 +2695,7 @@ class CavaAgent:
                     tot += d
                     on += d if float(a.value) >= 0.5 else 0.0
                 return f"{ch}: ON {on / tot:.0%} del tiempo" if tot else f"{ch}: sin cobertura"
-            hrs = max((rs[-1].event_time - rs[0].event_time).total_seconds() / 3600.0, 1e-6)
+            max((rs[-1].event_time - rs[0].event_time).total_seconds() / 3600.0, 1e-6)
             xs = [(r.event_time - rs[0].event_time).total_seconds() / 3600.0 for r in rs]
             mx_ = sum(xs) / len(xs)
             den = sum((x - mx_) ** 2 for x in xs) or 1e-9
@@ -3272,6 +3361,14 @@ class CavaAgent:
                     ),
                 }
 
+            if name == "list_converters":
+                return self._tool_list_converters(arguments)
+
+            if name == "alarm_history":
+                return self._tool_alarm_history(arguments)
+
+            if name == "correlate_with_alarms":
+                return self._tool_correlate_with_alarms(arguments)
             # ----------------------------------------------------
             # CURRENT TIME
             # ----------------------------------------------------
@@ -4164,3 +4261,181 @@ class CavaAgent:
         if swap:
             return [o for _, o in pairs], [rb for rb, _ in pairs]
         return [rb for rb, _ in pairs], [o for _, o in pairs]
+
+    def _render_tree(self, tree: dict) -> str:
+        """Texto legible del árbol descubierto."""
+        lines: list[str] = []
+        convs = tree.get("converters") or []
+        unassigned = tree.get("unassigned_instruments") or []
+        n_conv = tree.get("n_converters", 0)
+        n_inst = tree.get("n_instruments", 0)
+        n_eff = tree.get("n_channels_effective", 0)
+        n_tot = tree.get("n_channels_total", 0)
+        if n_conv or n_inst:
+            lines.append(
+                f"En SITRAD hay {n_conv} convertidor(es), {n_inst} instrumento(s) y "
+                f"{n_eff}/{n_tot} canales efectivos."
+            )
+        else:
+            lines.append("No encontré convertidores ni instrumentos en SITRAD.")
+
+        def _dump_instrument(ins: dict, indent: str = "  ") -> None:
+            lines.append(
+                f"{indent}• {ins.get('name')} (id {ins.get('id')}, "
+                f"{ins.get('n_channels_effective', 0)}/{ins.get('n_channels_total', 0)} canales efectivos)"
+            )
+            for ch in ins.get("channels", []):
+                if ch.get("accepted"):
+                    lines.append(f"{indent}    ✓ {ch['canal']}  ({ch['variable']}) = {ch.get('value')!r} {ch.get('unit') or ''}")
+                else:
+                    lines.append(f"{indent}    ⚠ {ch['canal']}  ({ch['variable']}) — {ch.get('reason') or 'descartado'}")
+
+        for c in convs:
+            lines.append(f"Convertidor {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'}):")
+            if not c.get("instruments"):
+                lines.append("  (sin instrumentos)")
+            for ins in c["instruments"]:
+                _dump_instrument(ins)
+        if unassigned:
+            lines.append("Sin convertidor asignado:")
+            for ins in unassigned:
+                _dump_instrument(ins)
+        return "\n".join(lines)
+
+
+    def _tool_list_converters(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Árbol SITRAD: convertidores → instrumentos → canales. Con caché en memoria."""
+        fn = getattr(self, "discovery_provider", None)
+        if fn is None:
+            return {"ok": False,
+                    "error": "El descubrimiento de hardware no está disponible "
+                            "(solo en modo sitrad con la fuente SITRAD activa)."}
+        refresh = bool(arguments.get("refresh"))
+        if not refresh:
+            cached = getattr(self, "_sitrad_tree", None)
+            if cached is not None:
+                return {"ok": True, "arbol": cached, "respuesta_base": self._render_tree(cached)}
+        try:
+            tree = fn()
+        except Exception as exc:
+            logger.exception("discover_all falló.")
+            return {"ok": False, "error": f"El descubrimiento en SITRAD falló: {exc}"}
+        self._sitrad_tree = tree
+        return {"ok": True, "arbol": tree, "respuesta_base": self._render_tree(tree)}
+
+
+
+    def _tool_alarm_history(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Alarmas de SITRAD persistidas en logs/sitrad_alarms.jsonl."""
+        from pathlib import Path
+        import json
+        path = Path("logs") / "sitrad_alarms.jsonl"
+        if not path.exists():
+            return {"ok": True, "alarmas": [], "por_codigo": {},
+                    "respuesta_base": ("No hay alarmas de SITRAD guardadas todavía. "
+                                       "Las alarmas se guardan a partir del próximo evento.")}
+        d0 = self._parse_dt(arguments.get("desde")) or (self._now() - timedelta(days=7))
+        d1 = self._parse_dt(arguments.get("hasta")) or self._now()
+        inst = (arguments.get("instrumento") or "").lower().strip()
+        codigo = (arguments.get("codigo") or "").lower().strip()
+        out: list[dict] = []
+        try:
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    t = self._parse_dt(rec.get("when")) or self._parse_dt(rec.get("saved_at"))
+                    if t is None or not (d0 <= t <= d1):
+                        continue
+                    if inst and inst not in (rec.get("instrument") or "").lower():
+                        continue
+                    if codigo and codigo not in json.dumps(rec.get("raw", {}), default=str).lower() \
+                            and codigo not in (rec.get("text") or "").lower():
+                        continue
+                    out.append({
+                        "when": t.isoformat(),
+                        "instrument": rec.get("instrument"),
+                        "text": rec.get("text"),
+                        "code": (rec.get("raw") or {}).get("code"),
+                    })
+        except Exception as exc:
+            return {"ok": False, "error": f"No pude leer logs/sitrad_alarms.jsonl: {exc}"}
+        out.sort(key=lambda r: r["when"])
+        por_codigo: dict[str, int] = {}
+        for a in out:
+            k = a.get("code") or a.get("text") or "?"
+            por_codigo[k] = por_codigo.get(k, 0) + 1
+        lines = [f"Alarmas de SITRAD entre {self._local_fmt(d0)} y {self._local_fmt(d1)}: {len(out)}."]
+        for k, n in sorted(por_codigo.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  • {k}: {n}")
+        for a in out[-10:]:
+            lines.append(f"  · {self._local_fmt(self._parse_dt(a['when']))} "
+                         f"{a['instrument'] or '?'} — {a['text']}")
+        return {"ok": True, "alarmas": out, "por_codigo": por_codigo,
+                "respuesta_base": "\n".join(lines)}
+
+
+
+    def _tool_correlate_with_alarms(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Coincidencia temporal entre variaciones de un canal y alarmas de SITRAD."""
+        ch = str(arguments.get("canal") or "Temp Cámara").strip()
+        if ch not in self.store.channels(device_id=self._device_id()):
+            return {"ok": False, "error": f"No existe el canal '{ch}'."}
+        d0 = self._parse_dt(arguments.get("desde")) or (self._now() - timedelta(days=7))
+        d1 = self._parse_dt(arguments.get("hasta")) or self._now()
+        minutes = max((d1 - d0).total_seconds() / 60.0, 30.0)
+        hist = self._tool_alarm_history({
+            "desde": d0.isoformat(), "hasta": d1.isoformat()})
+        alarmas = hist.get("alarmas", [])
+        var = self._tool_top_variations({"canal": ch, "minutos": minutes, "n": 20})
+        variaciones = var.get("variaciones", [])
+
+        def _parse_local(s: str | None):
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(str(s).replace(" ", "T")).replace(tzinfo=None)
+            except Exception:
+                return None
+
+        coincidencias = 0
+        detalles: list[str] = []
+        for v in variaciones:
+            t0 = _parse_local(v.get("inicio_local"))
+            t1 = _parse_local(v.get("fin_local"))
+            if t0 is None or t1 is None:
+                continue
+            hits = []
+            for a in alarmas:
+                ta_iso = a.get("when")
+                if not ta_iso:
+                    continue
+                try:
+                    ta = datetime.fromisoformat(ta_iso)
+                    from core.clock import local_tz
+                    ta_local = ta.astimezone(local_tz(self._tz_name())).replace(tzinfo=None)
+                except Exception:
+                    continue
+                if t0 <= ta_local <= t1:
+                    hits.append(a)
+            if hits:
+                coincidencias += 1
+                detalles.append(
+                    f"  · {v['inicio_local']} → {v['fin_local']} "
+                    f"({v['tipo']} {v['diferencia']:+.1f}) — alarmas: "
+                    + ", ".join((h.get("text") or "?") for h in hits[:2]))
+        lines = [f"{ch}: {len(variaciones)} variaciones, {len(alarmas)} alarmas, "
+                 f"{coincidencias} coincidencias."]
+        if detalles:
+            lines.append("Coincidencias:")
+            lines += detalles
+        elif not alarmas:
+            lines.append("(no hay alarmas guardadas todavía en esa ventana)")
+        return {"ok": True, "canal": ch, "variaciones": len(variaciones),
+                "alarmas": len(alarmas), "coincidencias": coincidencias,
+                "respuesta_base": "\n".join(lines)}

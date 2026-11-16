@@ -79,7 +79,7 @@ def main() -> int:
     if a.api:
         from simulation.excel_replay import load_sitrad_table
         from sources.sitrad_api import SitradApi, SitradApiSource
-        rows0, info0 = load_sitrad_table(a.excel)
+        rows0, _ = load_sitrad_table(a.excel)
         source = SitradApiSource(SitradApi(a.api, "u", "p"), dev, poll_seconds=0, alarms_every_s=0, save_raw=False)
         source.discover()
         clock = FrozenClock(rows0[0][0])

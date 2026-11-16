@@ -767,7 +767,7 @@ ACCION_CORTA = {
 }
 
 
-def _risk_lines(loads, temp_readings, cfg: CoolingConfig, now, only_level=None) -> list[str]:
+def _risk_lines(loads, temp_readings, cfg: CoolingConfig, now) -> list[str]:
     if not loads or not temp_readings:
         return []
     from analysis.product_log import ICON, assess_loads, render_load_line
@@ -947,14 +947,12 @@ class CoolingMonitor:
                 self._closed_seen.add(e.key)
                 self._closed_pending.append(e)
         if not self._primed:
-            # Al arrancar no se informa el pasado:
-            # recuperados y en curso se marcan como vistos.
             for e in exs:
                 self._alerted.add(e.key)
                 if e.recovered:
                     self._reported.add(e.key)
             self._primed = True
-            return list(out_stale)
+            return list(out_stale)   # solo avisos de "sin lecturas"
         for e in exs:
             routine = ((defrost_explains(e, self.cfg) and not self.cfg.notify_defrost)
                        or e.kind == "lectura_espuria")        # ruido del sensor: va al informe de periodo

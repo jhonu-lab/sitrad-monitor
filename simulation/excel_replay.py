@@ -20,12 +20,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from core.channel_catalog import CONTROLLER_SPECS, norm_col
+from core.channel_catalog import CONTROLLER_SPECS
 from core.clock import Clock, local_tz
 from core.contracts import ChannelReading, DataQuality, Snapshot
 

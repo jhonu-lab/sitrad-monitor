@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from analysis.cooling_report import (
-    CoolingConfig, _Fmt, _dur, _good, _n, _state_fraction, find_excursions)
+    CoolingConfig, _Fmt, _dur, _n, _state_fraction, find_excursions)
 from analysis.product_log import ICON, Load, assess_loads, render_load_line
 
 

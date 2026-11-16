@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
 
 from core.clock import Clock
 

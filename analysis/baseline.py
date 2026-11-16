@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from statistics import median
 from core.fastmath import mean, stdev
 from typing import Any, Iterable
-from zoneinfo import ZoneInfo
 
 from analysis.engine import AnalysisEngine
 from analysis.memory import HistoricalMemory

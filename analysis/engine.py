@@ -535,10 +535,7 @@ class AnalysisEngine:
 
         changes: list[Change] = []
 
-        for index, (previous, current) in enumerate(
-            zip(valid, valid[1:])
-        ):
-
+        for previous, current in zip(valid, valid[1:]):
             dt = (
                 current.event_time
                 - previous.event_time

@@ -11,7 +11,6 @@ de RECOMMENDED (gap de 600 s y canales exentos de señal plana).
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
 
 sys.path.insert(0, ".")
 from agent.cava_agent import CavaAgent
@@ -61,8 +60,7 @@ def _label(sec: float) -> str:
     nearest = min(_LADDER, key=lambda x: abs(math.log(max(sec, 1) / x)))
     return f"{nearest} s" if nearest < 60 else f"{nearest // 60} min"
 
-
-def regimes(readings, channel: str, bin_min: float = 60.0):
+def regimes(readings, channel: str):
     """Mapa de regímenes de muestreo: [(inicio, fin, etiqueta, n_lecturas)].
     Etiqueta = paso mediano de cada hora redondeado a uno típico, o SIN DATOS.
     Un corte es una hora sin ninguna lectura; la cadencia lenta NO es un corte."""

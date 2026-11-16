@@ -7,7 +7,9 @@ Simula la cámara, corre el monitor de temperatura y muestra cada mensaje
 (alerta / informe de episodio) y al final el informe del periodo.
 """
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse
+import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, ".")

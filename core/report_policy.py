@@ -185,7 +185,7 @@ class ReportPolicy:
         - Agrupación por actividad reciente, no por `opened_at`.
         """
         messages: list[PolicyMessage] = []
-        active_channels = set(active_states.keys())
+        set(active_states.keys())
 
         for channel, state in active_states.items():
 

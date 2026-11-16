@@ -15,7 +15,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, ".")
-from analysis.feedback_log import REAL_LABEL, CaseBook, bot_label
+from analysis.feedback_log import CaseBook, bot_label
 
 
 def main() -> None:

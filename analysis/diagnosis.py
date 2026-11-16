@@ -20,7 +20,6 @@ from datetime import datetime, timedelta
 from statistics import mean, median
 from typing import Any
 
-from core.contracts import ChannelReading, DataQuality
 
 try:
     from core.channel_catalog import ALL_SPECS, ROLE_TO_CHANNEL
@@ -77,7 +76,20 @@ BENIGN_HYPOTHESES = frozenset({
 SILENCEABLE_KINDS = frozenset({"out_of_profile", "persistent_drift"})
 # Hipótesis que describen el estado del equipo, no la causa de un incidente: van a bundle.avisos.
 INFORMATIVE_HYPOTHESES = frozenset({"datalogger_lleno"})
-
+ALARM_TO_HYPOTHESIS = {
+    "IsAlrHighPressure":    ("alta_presion",            0.85, "El controlador reporta alta presión"),
+    "IsAlrLowPressure":     ("baja_presion",            0.85, "El controlador reporta baja presión"),
+    "IsAlrHighTempS1":      ("alarma_temp_alta_controlador", 0.85, "El controlador reporta temperatura alta"),
+    "IsAlrLowTempS1":       ("alarma_temp_baja_controlador", 0.85, "El controlador reporta temperatura baja"),
+    "IsAlrmDoorOpn":        ("puerta_prolongada",       0.85, "El controlador reporta puerta abierta"),
+    "IsDefrTimeOut":        ("deshielo_extendido",      0.95, "El controlador reporta timeout de deshielo"),
+    "IsErrorS1":            ("sensor_error",            0.90, "El controlador reporta error en sonda S1"),
+    "IsErrorS2":            ("sensor_error",            0.90, "El controlador reporta error en sonda S2"),
+    "IsErrorS3":            ("sensor_error",            0.90, "El controlador reporta error en sonda S3"),
+    "IsCompMaxTOn":         ("compresor_racha_maxima",  0.80, "El compresor superó el tiempo máximo ON"),
+    "IsAlarmMaintenance":   ("mantenimiento_pendiente", 0.70, "El controlador pide mantenimiento"),
+    "IsClockDeprogrammed":  ("reloj_desprogramado",     0.70, "El reloj del controlador está desprogramado"),
+}
 
 def is_benign(bundle, incident_kind: str | None = None) -> bool:
     if not bundle.hipotesis or bundle.principal not in BENIGN_HYPOTHESES:
@@ -111,7 +123,45 @@ def is_unexplained(bundle, incident_kind: str | None, severity: float | None,
         return False
     return severity is None or float(severity) < max_severity
 
-
+def _tool_alarm_history(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Alarmas de SITRAD persistidas en logs/sitrad_alarms.jsonl."""
+    from pathlib import Path
+    import json
+    path = Path("logs") / "sitrad_alarms.jsonl"
+    if not path.exists():
+        return {"ok": True, "alarmas": [], "respuesta_base": "No hay alarmas guardadas."}
+    d0 = self._parse_dt(arguments.get("desde")) or (self._now() - timedelta(days=7))
+    d1 = self._parse_dt(arguments.get("hasta")) or self._now()
+    inst = (arguments.get("instrumento") or "").lower()
+    codigo = (arguments.get("codigo") or "").lower()
+    out = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            t = self._parse_dt(rec.get("when")) or self._parse_dt(rec.get("saved_at"))
+            if t is None or not (d0 <= t <= d1):
+                continue
+            if inst and inst not in (rec.get("instrument") or "").lower():
+                continue
+            if codigo and codigo not in json.dumps(rec.get("raw", {}), default=str).lower():
+                continue
+            out.append({"when": t.isoformat(), "instrument": rec.get("instrument"),
+                        "text": rec.get("text"), "code": rec.get("raw", {}).get("code")})
+    out.sort(key=lambda r: r["when"])
+    por_codigo = {}
+    for a in out:
+        k = a.get("code") or a.get("text") or "?"
+        por_codigo[k] = por_codigo.get(k, 0) + 1
+    lines = [f"Alarmas de SITRAD entre {self._local_fmt(d0)} y {self._local_fmt(d1)}: {len(out)}."]
+    for k, n in sorted(por_codigo.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  • {k}: {n}")
+    for a in out[-10:]:
+        lines.append(f"  · {self._local_fmt(self._parse_dt(a['when']))} {a['instrument'] or '?'} — {a['text']}")
+    return {"ok": True, "alarmas": out, "por_codigo": por_codigo,
+            "respuesta_base": "\n".join(lines)}
 def _prefer_non_benign(bundle, incident_kind: str | None):
     """
     Un incidente ESTRUCTURAL (consistencia entre instrumentos, señal plana,

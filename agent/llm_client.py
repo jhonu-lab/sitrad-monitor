@@ -361,7 +361,7 @@ class OllamaLLM(BaseLLM):
 
         # Comparar prompt_eval_count con lo esperado (detección de truncamiento)
         prompt_eval_count = data.get("prompt_eval_count")
-        eval_count = data.get("eval_count")
+        data.get("eval_count")
         if prompt_eval_count is not None and prompt_eval_count < 10:
             logger.warning(
                 "Ollama: prompt_eval_count muy bajo (%s). "
@@ -510,7 +510,7 @@ class OllamaLLM(BaseLLM):
 
         started = time.monotonic()
 
-        for round_number in range(max_tool_rounds):
+        for _ in range(max_tool_rounds):
 
             payload: Dict[str, Any] = {
                 "model": self.model,
