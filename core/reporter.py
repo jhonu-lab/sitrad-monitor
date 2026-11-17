@@ -1220,29 +1220,55 @@ class Reporter:
     # =============================================================
     # ENVÍO
         # =============================================================
-
     def _process_sitrad_alarms(self, now: datetime) -> None:
-        """Las alarmas configuradas en SITRAD (fuente API) llegan al chat, en corto, con la temperatura del momento."""
         fn = getattr(self.source, "new_alarms", None)
         if fn is None:
             return
         try:
             from core.clock import local_tz
             from analysis.diagnosis import DEFAULT_CFG
+
             fresh = fn(now)
             if not fresh:
                 return
             tz = local_tz(self.cooling_cfg.tz_name)
-            temp = self.store.get_series(int(self.config["device_id"]), DEFAULT_CFG["ch_temp"], minutes=30)
+            temp = self.store.get_series(int(self.config["device_id"]),
+                                        DEFAULT_CFG["ch_temp"], minutes=30)
             tlast = next((float(x.value) for x in reversed(temp) if x.value is not None), None)
+
             for al in fresh:
                 self.sitrad_alarms.append(al)
                 when = al["when"].astimezone(tz).strftime("%H:%M") if al.get("when") else None
-                head = "🔔 Alarma de SITRAD" + (f" — {al['instrument']}" if al.get("instrument") else "")
-                lines = [head + (f" ({when})" if when else ""), al["text"]]
-                if tlast is not None:
-                    lines.append(f"Temperatura de la cámara ahora: {str(round(tlast, 1)).replace('.', ',')} °C.")
-                self._send("\n".join(lines), reason="alarma_sitrad")
+                inst = al.get("instrument", "")
+
+                # ¿Es una alarma de temperatura?
+                text_lower = (al.get("text") or "").lower()
+                is_temp_alarm = any(k in text_lower for k in
+                                    ("temperatura", "temp", "alta temp", "high temp", "calor"))
+
+                if is_temp_alarm and self._cooling_enabled:
+                    # Consolidar: alarma + diagnóstico en un solo mensaje
+                    r = self.agent._tool_diagnose_now({"minutos": 60})
+                    diag = r.get("respuesta_base") if r.get("ok") else ""
+                    lines = [f"🔔 Alarma de SITRAD" + (f" — {inst}" if inst else "")
+                            + (f" ({when})" if when else "")]
+                    lines.append(al["text"])
+                    if tlast is not None:
+                        lines.append(f"Temperatura de la cámara ahora: "
+                                    f"{str(round(tlast, 1)).replace('.', ',')} °C.")
+                    if diag:
+                        lines.append("")
+                        lines.append("Diagnóstico: " + diag)
+                    self._send("\n".join(lines), reason="alarma_sitrad_temp")
+                else:
+                    # Alarma no térmica: mensaje corto como antes
+                    lines = [f"🔔 Alarma de SITRAD" + (f" — {inst}" if inst else "")
+                            + (f" ({when})" if when else "")]
+                    lines.append(al["text"])
+                    if tlast is not None:
+                        lines.append(f"Temperatura de la cámara ahora: "
+                                    f"{str(round(tlast, 1)).replace('.', ',')} °C.")
+                    self._send("\n".join(lines), reason="alarma_sitrad")
         except Exception:
             logger.exception("Fallo procesando las alarmas de SITRAD.")
 

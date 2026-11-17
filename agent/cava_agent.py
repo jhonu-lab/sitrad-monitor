@@ -487,26 +487,24 @@ class CavaAgent:
         # LIST CHANNELS
         # --------------------------------------------------------
         {
-        "type": "function",
-        "function": {
-            "name": "list_converters",
-            "description": (
-                "Lista los convertidores SITRAD con sus instrumentos y los canales "
-                "de cada instrumento (incluye los descartados y por qué). "
-                "Úsala para 'qué hardware hay conectado', 'qué convertidores tienes', "
-                "'qué mide cada equipo' o cuando el usuario pregunte por un canal "
-                "que no está en la lista del instrumento activo."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "refresh": {"type": "boolean",
-                                "description": "Si true, vuelve a consultar SITRAD en vez de usar la caché."},
-                },
-                "required": [],
+    "type": "function",
+    "function": {
+        "name": "list_converters",
+        "description": (
+            "Lista los convertidores SITRAD con sus instrumentos y los canales "
+            "de cada instrumento. modo='summary' para solo convertidores, "
+            "modo='list' para convertidores+instrumentos, modo='full' para incluir canales."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "refresh": {"type": "boolean"},
+                "modo": {"type": "string", "enum": ["full", "summary", "list"]},
             },
+            "required": [],
         },
     },
+},
 
 
             {
@@ -1964,13 +1962,25 @@ class CavaAgent:
                 r = _ex("diagnose_now", {"minutos": 360})
                 parts.append(self._render_instrument_status(r))
             if has("convertidor", "convertidores", "que hardware", "que equipos",
-                "que hay conectado", "que instrumentos", "que canales hay",
-                "que canales tiene", "que variables", "cuales instrumentos",
-                "instrumentos tiene", "que mide cada"):
-                r = _ex("list_converters", {"refresh": has("ahora", "actualiza", "refresh", "vuelve a")})
+                "que hay conectado", "que instrumentos", "cuales instrumentos",
+                "instrumentos tienes", "que mide cada",
+                "que canales hay", "que canales tienes", "que canales tiene",
+                "canales del", "canales de la", "canales de", "canales tiene",
+                "canales hay", "canales disponibles", "que variables",
+                "canales tiene el", "canales tiene la"):
+                # Elegir modo
+                if has("convertidor", "convertidores") and not has("canal", "canales"):
+                    modo = "list"          # "cuáles son los convertidores"
+                elif has("hardware", "equipos", "conectado", "instrumentos") and not has("canal", "canales"):
+                    modo = "summary"       # "qué hardware hay"
+                else:
+                    modo = "full"          # "canales del TC-900E"
+                r = _ex("list_converters",
+                        {"refresh": has("ahora", "actualiza", "refresh", "vuelve a"),
+                        "modo": modo})
                 txt = r.get("respuesta_base") if r.get("ok") else (r.get("error") or "")
                 if not txt:
-                    txt = self._render_instruments()   # fallback al método actual
+                    txt = self._render_instruments()
                 parts.append(txt)
             if (has("temperatura actual", "temperatura de la cava", "temperatura de la camara")
                     and not parts):
@@ -2087,28 +2097,38 @@ class CavaAgent:
                 f"({v['diferencia']:+.1f} °C) en {v['duracion_min']:.0f} min, "
                 f"{v['inicio_local']} → {v['fin_local']}: {v['contexto']}.")
         return "\n".join(lines)
-
     def _render_instruments(self) -> str:
-        from core.channel_catalog import CONTROLLER_SPECS
-        if not self._has_multipower():
-            try:
-                present = set(self.store.channels(device_id=self._device_id()))
-            except Exception:
-                present = set()
-            names = [sp.name for sp in CONTROLLER_SPECS if not present or sp.name in present]
-            return (f"Tengo un solo instrumento: el controlador de la cámara ({len(names)} canales): "
-                    f"{', '.join(names)}.\n"
-                    "No hay medidor eléctrico (Multipower): sin potencia, tensión ni energía.")
-        ctrl = ", ".join(sp.name for sp in CONTROLLER_SPECS)
-        return (
-            "Tengo dos instrumentos:\n"
-            f"• Controlador (7 canales): {ctrl}.\n"
-            "• Multipower (30 canales): dos medidores, M1 y M2, con 15 variables cada uno "
-            "(tensión y corriente por fase, potencia activa, reactiva y aparente, factor de "
-            "potencia, frecuencia, simetrías de tensión y corriente, demanda activa y energía "
-            "activa).\n"
-            "No hay temperatura de producto."
+        from core.channel_catalog import CONTROLLER_SPECS, SPEC_BY_NAME
+        try:
+            present = set(self.store.channels(device_id=self._device_id()))
+        except Exception:
+            present = set()
+
+        if not present:
+            return "No tengo canales registrados todavía."
+
+        catalogados = sorted(ch for ch in present if ch in SPEC_BY_NAME)
+        passthrough = sorted(ch for ch in present if ch not in SPEC_BY_NAME)
+
+        lines = [f"Canales disponibles: {len(present)}."]
+        if catalogados:
+            lines.append(f"\nCatalogados ({len(catalogados)}):")
+            for ch in catalogados:
+                lines.append(f"  · {ch}")
+        if passthrough:
+            # No listar 121 canales por fase: agrupar por prefijo
+            from collections import Counter
+            prefijos = Counter(ch.split(":")[0] if ":" in ch else ch.split(" ")[0]
+                            for ch in passthrough)
+            lines.append(f"\nNo catalogados ({len(passthrough)}, agrupados por prefijo):")
+            for pref, n in sorted(prefijos.items(), key=lambda kv: -kv[1]):
+                ejemplos = [c for c in passthrough if c.startswith(pref)][:3]
+                lines.append(f"  · {pref} ({n}): {', '.join(ejemplos)}{'...' if n > 3 else ''}")
+
+        lines.append(
+            f"\nMedidores eléctricos: {'sí' if self._has_multipower() else 'no'}."
         )
+        return "\n".join(lines)
     @staticmethod
     def _render_instrument_status(r: dict) -> str:
         d = r.get("datos_clave") or {}
@@ -3111,17 +3131,45 @@ class CavaAgent:
 
         minutes = float(arguments.get("minutos", 360.0) or 360.0)
         dev = self._device_id()
-        series = {
+        all_series = {
             ch: self.store.get_series(dev, ch, minutes=minutes)
             for ch in self.store.channels(device_id=dev)
         }
+
+        # Detectar dominio: ¿es cava?
+        CAVA_CHANNELS = {
+            "Temp Cámara", "Temp Cámara (alt)", "Temperatura",
+            "Estado Refrigeración", "Estado Deshielo",
+            "Puerta Abierta", "Temp Evaporador", "Estado Ventilador",
+            "Setpoint", "Desvío vs Setpoint",
+            "M1 Potencia Activa", "M2 Potencia Activa",
+        }
+        cava_series = {ch: rs for ch, rs in all_series.items() if ch in CAVA_CHANNELS}
+
+        if not cava_series:
+            # Instrumento fuera de dominio: NO inventar hipótesis de cava
+            canales = sorted(all_series.keys())
+            return {
+                "ok": True,
+                "resumen": f"Canales: {', '.join(canales[:10])}"
+                        + (f"... ({len(canales)} en total)" if len(canales) > 10 else ""),
+                "respuesta_base": (
+                    "Este instrumento no es una cava de refrigeración "
+                    f"(no tiene {', '.join(sorted(CAVA_CHANNELS)[:4])}...). "
+                    "Puedo mostrar estadísticas, tendencias y evolución temporal de sus canales, "
+                    "pero no diagnosticarlo con reglas de refrigeración."
+                ),
+                "datos_clave": {"canales": canales, "dominio": "otro"},
+            }
+
+        # Diagnóstico normal con los canales de cava
         levels = None
         if self._levels_provider is not None:
             try:
                 levels = self._levels_provider()
             except Exception:
                 logger.exception("No se pudieron leer los niveles aprendidos.")
-        b = diagnose(series, levels=levels)
+        b = diagnose(cava_series, levels=levels)
         F = b.rasgos
 
         def f(k, nd=1):
@@ -3353,12 +3401,19 @@ class CavaAgent:
             # ----------------------------------------------------
 
             if name == "list_channels":
+                from core.channel_catalog import SPEC_BY_NAME
+                all_ch = self.store.channels(device_id=self._device_id())
+                cataloged = [c for c in all_ch if c in SPEC_BY_NAME]
+                passthrough = [c for c in all_ch if c not in SPEC_BY_NAME]
                 return {
                     "ok": True,
                     "device_id": self._device_id(),
-                    "canales": self.store.channels(
-                        device_id=self._device_id()
-                    ),
+                    "canales_catalogados": cataloged,
+                    "total": len(all_ch),
+                    "passthrough_resumen": (
+                        f"{len(passthrough)} canales no catalogados (no listados aquí). "
+                        "Si el usuario pide verlos, usa list_converters."
+                    ) if passthrough else None,
                 }
 
             if name == "list_converters":
@@ -4261,9 +4316,8 @@ class CavaAgent:
         if swap:
             return [o for _, o in pairs], [rb for rb, _ in pairs]
         return [rb for rb, _ in pairs], [o for _, o in pairs]
-
-    def _render_tree(self, tree: dict) -> str:
-        """Texto legible del árbol descubierto."""
+    def _render_tree(self, tree: dict, mode: str = "full") -> str:
+        """mode: 'full' (canales con valores) | 'summary' (solo convertidores) | 'list' (solo instrumentos)."""
         lines: list[str] = []
         convs = tree.get("converters") or []
         unassigned = tree.get("unassigned_instruments") or []
@@ -4271,65 +4325,125 @@ class CavaAgent:
         n_inst = tree.get("n_instruments", 0)
         n_eff = tree.get("n_channels_effective", 0)
         n_tot = tree.get("n_channels_total", 0)
+        n_cat = tree.get("n_channels_catalogados", 0)
+        n_pt = tree.get("n_channels_passthrough", 0)
+
+        # Cabecera
         if n_conv or n_inst:
             lines.append(
-                f"En SITRAD hay {n_conv} convertidor(es), {n_inst} instrumento(s) y "
-                f"{n_eff}/{n_tot} canales efectivos."
+                f"SITRAD: {n_conv} convertidor(es), {n_inst} instrumento(s), "
+                f"{n_eff}/{n_tot} canales efectivos "
+                f"({n_cat} catalogados + {n_pt} passthrough)."
             )
         else:
-            lines.append("No encontré convertidores ni instrumentos en SITRAD.")
+            return "No encontré convertidores ni instrumentos en SITRAD."
+
+        if mode == "summary":
+            for c in convs:
+                lines.append(f"  · Convertidor {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'})")
+                for ins in c.get("instruments", []):
+                    lines.append(f"    → {ins.get('name')} (id {ins.get('id')})")
+            for ins in unassigned:
+                lines.append(f"  · {ins.get('name')} (id {ins.get('id')}, sin convertidor)")
+            return "\n".join(lines)
+
+        if mode == "list":
+            for c in convs:
+                inst_names = ", ".join(i.get("name", "?") for i in c.get("instruments", []))
+                lines.append(
+                    f"  · {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'})"
+                    + (f" → {inst_names}" if inst_names else " (sin instrumentos)")
+                )
+            for ins in unassigned:
+                lines.append(f"  · (sin convertidor) {ins.get('name')} (id {ins.get('id')})")
+            return "\n".join(lines)
+
+        # mode == "full": árbol con canales
+        def _real_prefix(name: str) -> str:
+            """Prefijo real: 'M1: ...' → 'M1:', 'FncTimeX' → 'Fnc', 'IsAlrX' → 'Is', 'Day' → 'Day'."""
+            if ":" in name:
+                return name.split(":")[0].strip() + ":"
+            # Primer segmento CamelCase o palabra corta
+            m = re.match(r"^([A-Z][a-z]+|[A-Z]{2,}|[A-Z][a-z]*[0-9]*)", name)
+            if m and len(m.group(1)) >= 2:
+                return m.group(1)
+            return name[:8]
 
         def _dump_instrument(ins: dict, indent: str = "  ") -> None:
+            cat_n = ins.get("n_channels_catalogados", 0)
+            pt_n = ins.get("n_channels_passthrough", 0)
+            eff = ins.get("n_channels_effective", 0)
+            total = ins.get("n_channels_total", 0)
             lines.append(
-                f"{indent}• {ins.get('name')} (id {ins.get('id')}, "
-                f"{ins.get('n_channels_effective', 0)}/{ins.get('n_channels_total', 0)} canales efectivos)"
+                f"{indent}• {ins.get('name')} (id {ins.get('id')}) — "
+                f"{eff}/{total} canales ({cat_n} catalogados + {pt_n} passthrough)"
             )
-            for ch in ins.get("channels", []):
+            channels = ins.get("channels", [])
+            catalogados = [c for c in channels if c.get("catalogado", True)]
+            passthrough = [c for c in channels if not c.get("catalogado", True)]
+
+            for ch in catalogados:
                 if ch.get("accepted"):
-                    lines.append(f"{indent}    ✓ {ch['canal']}  ({ch['variable']}) = {ch.get('value')!r} {ch.get('unit') or ''}")
+                    lines.append(f"{indent}    ✓ {ch['canal']}  ({ch['variable']}) = "
+                                f"{ch.get('value')!r} {ch.get('unit') or ''}")
                 else:
-                    lines.append(f"{indent}    ⚠ {ch['canal']}  ({ch['variable']}) — {ch.get('reason') or 'descartado'}")
+                    lines.append(f"{indent}    ⚠ {ch['canal']}  ({ch['variable']}) — "
+                                f"{ch.get('reason') or 'descartado'}")
+
+            if passthrough:
+                groups: dict[str, list[str]] = {}
+                for ch in passthrough:
+                    groups.setdefault(_real_prefix(ch["canal"]), []).append(ch["canal"])
+                n_groups = len(groups)
+                lines.append(f"{indent}    Passthrough: {len(passthrough)} canales en "
+                            f"{n_groups} grupos. Los 10 más grandes:")
+                for pref, items in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:10]:
+                    ejemplos = ", ".join(items[:3]) + ("..." if len(items) > 3 else "")
+                    lines.append(f"{indent}      · {pref}* ({len(items)}): {ejemplos}")
+                if n_groups > 10:
+                    resto = sum(len(v) for k, v in groups.items()
+                                if k not in dict(sorted(groups.items(), key=lambda kv: -len(kv[1]))[:10]))
+                    lines.append(f"{indent}      · ... y {n_groups - 10} grupos más ({resto} canales)")
 
         for c in convs:
-            lines.append(f"Convertidor {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'}):")
+            lines.append(f"\nConvertidor {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'}):")
             if not c.get("instruments"):
                 lines.append("  (sin instrumentos)")
             for ins in c["instruments"]:
                 _dump_instrument(ins)
         if unassigned:
-            lines.append("Sin convertidor asignado:")
+            lines.append("\nSin convertidor asignado:")
             for ins in unassigned:
                 _dump_instrument(ins)
         return "\n".join(lines)
 
-
     def _tool_list_converters(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Árbol SITRAD: convertidores → instrumentos → canales. Con caché en memoria."""
         fn = getattr(self, "discovery_provider", None)
         if fn is None:
             return {"ok": False,
                     "error": "El descubrimiento de hardware no está disponible "
                             "(solo en modo sitrad con la fuente SITRAD activa)."}
         refresh = bool(arguments.get("refresh"))
+        modo = str(arguments.get("modo") or "full").lower()
+        if modo not in ("full", "summary", "list"):
+            modo = "full"
         if not refresh:
             cached = getattr(self, "_sitrad_tree", None)
             if cached is not None:
-                return {"ok": True, "arbol": cached, "respuesta_base": self._render_tree(cached)}
+                return {"ok": True, "arbol": cached, "respuesta_base": self._render_tree(cached, modo)}
         try:
             tree = fn()
         except Exception as exc:
             logger.exception("discover_all falló.")
             return {"ok": False, "error": f"El descubrimiento en SITRAD falló: {exc}"}
         self._sitrad_tree = tree
-        return {"ok": True, "arbol": tree, "respuesta_base": self._render_tree(tree)}
-
-
+        return {"ok": True, "arbol": tree, "respuesta_base": self._render_tree(tree, modo)}
 
     def _tool_alarm_history(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Alarmas de SITRAD persistidas en logs/sitrad_alarms.jsonl."""
         from pathlib import Path
         import json
-        path = Path("logs") / "sitrad_alarms.jsonl"
+        path = Path("sitrad_data") / "sitrad_alarms.jsonl"
         if not path.exists():
             return {"ok": True, "alarmas": [], "por_codigo": {},
                     "respuesta_base": ("No hay alarmas de SITRAD guardadas todavía. "

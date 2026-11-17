@@ -13,7 +13,30 @@ import ast
 import sys
 from pathlib import Path
 
-IGNORE_DIRS = {"tools", "tests", "__pycache__", ".git", "venv", ".venv", "logs", "sitrad_data"}
+# Directorios que nunca forman parte del código del proyecto:
+# - puntos de entrada propios (tools/, tests/)
+# - cachés y control de versiones
+# - entornos virtuales (cualquier nombre habitual)
+# - artefactos de build
+# - datos generados por el bot (logs/, sitrad_data/)
+IGNORE_DIRS = {
+    "tools", "tests",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".git",
+    "venv", ".venv", "env", ".env",
+    "site-packages", "dist-packages", "node_modules",
+    "build", "dist", ".eggs",
+    "logs", "sitrad_data",
+}
+
+
+def _is_venv_dir(d: Path) -> bool:
+    """Un directorio es un venv (o un paquete instalado) si tiene pyvenv.cfg
+    o si se llama site-packages / dist-packages. Se usa para excluirlo aunque
+    no esté en IGNORE_DIRS (por ejemplo, si algún día se llama 'envs')."""
+    if (d / "pyvenv.cfg").exists():
+        return True
+    return d.name in {"site-packages", "dist-packages"}
 
 
 def module_name(root: Path, p: Path) -> str:
@@ -51,14 +74,24 @@ def main() -> int:
     ap.add_argument("--root", default=".")
     a = ap.parse_args()
     root = Path(a.root).resolve()
+
     files = {}
     for p in root.rglob("*.py"):
-        if IGNORE_DIRS & set(p.relative_to(root).parts):
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            continue
+        if IGNORE_DIRS & set(rel.parts):
+            continue
+        # Excluir si algún directorio padre es un venv / site-packages
+        if any(_is_venv_dir(parent) for parent in p.parents if parent != root and parent.is_relative_to(root)):
             continue
         files[module_name(root, p)] = p
+
     if a.entry not in files:
         print(f"No encuentro el módulo de entrada '{a.entry}'.")
         return 2
+
     seen, todo = set(), [a.entry]
     while todo:
         m = todo.pop()
@@ -68,8 +101,9 @@ def main() -> int:
         p = files[m]
         for imp in imports_of(p, m, p.name == "__init__.py"):
             parts = imp.split(".")
-            for i in range(1, len(parts) + 1):               # el paquete y todos sus padres también se cargan
+            for i in range(1, len(parts) + 1):
                 todo.append(".".join(parts[:i]))
+
     orphans = sorted(m for m in files if m not in seen and files[m].name != "__init__.py" and m != "")
     print(f"Módulos del proyecto: {len(files)} · alcanzados desde {a.entry}: {len(seen & set(files))}")
     if orphans:

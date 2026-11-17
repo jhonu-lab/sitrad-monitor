@@ -1,11 +1,23 @@
-# verify_project.ps1
-# Verificación completa post-limpieza. Ejecutar desde la raíz del proyecto.
+# verify_project.ps1 v3
+# Verificación de código. No verifica entorno, dependencias ni credenciales.
+# Excluye env/, .venv/, venv/, site-packages/, node_modules/ de todos los recorridos.
 
 $ErrorActionPreference = "Continue"
 $PY = ".\.venv\Scripts\python.exe"
+if (-not (Test-Path $PY)) { $PY = ".\env\Scripts\python.exe" }
 if (-not (Test-Path $PY)) { $PY = "python" }
 
 $fails = 0
+$EXCLUDE_DIRS = @('__pycache__', '.venv', 'venv', 'env', 'site-packages', 'node_modules', '.git')
+
+function IsExcluded($path) {
+    $parts = $path -split '\\'
+    foreach ($p in $parts) {
+        if ($EXCLUDE_DIRS -contains $p) { return $true }
+    }
+    return $false
+}
+
 function Check($name, $cmd) {
     Write-Host "`n>>> $name" -ForegroundColor Cyan
     $out = Invoke-Expression $cmd 2>&1
@@ -21,17 +33,17 @@ function Check($name, $cmd) {
 }
 
 Write-Host "============================================================" -ForegroundColor Yellow
-Write-Host " VERIFICACION COMPLETA DEL PROYECTO" -ForegroundColor Yellow
+Write-Host " VERIFICACION DEL PROYECTO (v3)" -ForegroundColor Yellow
 Write-Host "============================================================" -ForegroundColor Yellow
 Write-Host "Python: $PY"
 
 # ------------------------------------------------------------------
-# 1. COMPILACION DE TODO EL ARBOL
+# 1. py_compile
 # ------------------------------------------------------------------
-Write-Host "`n>>> 1. py_compile (todo el arbol)" -ForegroundColor Cyan
+Write-Host "`n>>> 1. py_compile" -ForegroundColor Cyan
 $bad = @()
 Get-ChildItem -Recurse -Filter *.py |
-    Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\.venv\\' } |
+    Where-Object { -not (IsExcluded $_.FullName) } |
     ForEach-Object {
         & $PY -m py_compile $_.FullName 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { $bad += $_.FullName }
@@ -44,32 +56,34 @@ if ($bad.Count -eq 0) {
 }
 
 # ------------------------------------------------------------------
-# 2. TESTS
+# 2. pytest
 # ------------------------------------------------------------------
-Check "2. pytest (30 tests)" "$PY -m pytest tests -q"
+Check "2. pytest" "$PY -m pytest tests -q"
 
 # ------------------------------------------------------------------
-# 3. MODULOS HUERFANOS
+# 3. scan_unused (ya excluye env/.venv internamente)
 # ------------------------------------------------------------------
-Check "3. scan_unused (0 huerfanos)" "$PY tools/scan_unused.py --entry run_reporter"
+Check "3. scan_unused" "$PY tools/scan_unused.py --entry run_reporter"
 
 # ------------------------------------------------------------------
-# 4. VULTURE (codigo sin uso)
+# 4. vulture
 # ------------------------------------------------------------------
-Write-Host "`n>>> 4. vulture (80% confidence)" -ForegroundColor Cyan
-$vulture = & vulture . --min-confidence 80 --exclude .venv,__pycache__,logs,sitrad_data,tools/legacy 2>&1
+Write-Host "`n>>> 4. vulture" -ForegroundColor Cyan
+$vulture = & vulture . --min-confidence 80 --exclude .venv,venv,env,__pycache__,logs,sitrad_data,node_modules,tools/legacy 2>&1
 if ($vulture) {
     $vulture | ForEach-Object { Write-Host "    $_" }
-    Write-Host "    [REVISAR] vulture encontro hallazgos (no necesariamente muertos)" -ForegroundColor Yellow
+    Write-Host "    [REVISAR] vulture encontro hallazgos" -ForegroundColor Yellow
 } else {
     Write-Host "    [OK] vulture limpio" -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------
-# 5. PYFLAKES
+# 5. pyflakes
 # ------------------------------------------------------------------
 Write-Host "`n>>> 5. pyflakes" -ForegroundColor Cyan
-$pyflakes = & $PY -m pyflakes . 2>&1
+$pyflakes = & $PY -m pyflakes . 2>&1 | Where-Object {
+    -not ($_ -match '\\(env|\.venv|venv|site-packages|__pycache__)\\')
+}
 if ($pyflakes) {
     $pyflakes | ForEach-Object { Write-Host "    $_" }
     Write-Host "    [REVISAR] pyflakes encontro hallazgos" -ForegroundColor Yellow
@@ -78,14 +92,12 @@ if ($pyflakes) {
 }
 
 # ------------------------------------------------------------------
-# 6. IMPORTS EN CALIENTE (nada roto en runtime)
+# 6. Import de todos los modulos
 # ------------------------------------------------------------------
 Write-Host "`n>>> 6. Import de todos los modulos" -ForegroundColor Cyan
 $importScript = @'
 import importlib, pkgutil, sys
-from pathlib import Path
 sys.path.insert(0, ".")
-
 roots = ["agent", "analysis", "core", "notifiers", "simulation", "sources"]
 bad = []
 for r in roots:
@@ -101,8 +113,7 @@ for extra in ("run_reporter",):
         bad.append(f"{extra}: {e!r}")
 if bad:
     print("FALLA")
-    for b in bad:
-        print("  ", b)
+    for b in bad: print("  ", b)
     sys.exit(1)
 print("OK", len(roots), "paquetes")
 '@
@@ -112,35 +123,35 @@ $importScript | Set-Content -Encoding utf8 $tmp
 if ($LASTEXITCODE -ne 0) { $fails++ } else { Write-Host "    [OK] todos los modulos importan" -ForegroundColor Green }
 
 # ------------------------------------------------------------------
-# 7. ARCHIVOS OBSOLETOS
+# 7. Duplicados y __pycache__
 # ------------------------------------------------------------------
-Write-Host "`n>>> 7. Archivos obsoletos" -ForegroundColor Cyan
+Write-Host "`n>>> 7. Archivos duplicados" -ForegroundColor Cyan
 $dups = Get-ChildItem -Recurse -Filter *.py |
-    Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.FullName -notmatch '\\.venv\\' -and $_.Name -ne '__init__.py' } |
+    Where-Object { -not (IsExcluded $_.FullName) -and $_.Name -ne '__init__.py' } |
     Group-Object Name |
     Where-Object Count -gt 1
 if ($dups) {
     $dups | ForEach-Object { Write-Host "    [DUPLICADO] $($_.Name) x$($_.Count)" -ForegroundColor Yellow }
 } else {
-    Write-Host "    [OK] 0 duplicados de .py" -ForegroundColor Green
+    Write-Host "    [OK] 0 duplicados" -ForegroundColor Green
 }
 
 $pycache = Get-ChildItem -Recurse -Directory -Filter __pycache__ |
-    Where-Object { $_.FullName -notmatch '\\.venv\\' }
+    Where-Object { -not ($_.FullName -match '\\(env|\.venv|venv)\\.*__pycache__') }
 if ($pycache) {
-    Write-Host "    [INFO] $($pycache.Count) __pycache__ (se pueden borrar)" -ForegroundColor Yellow
+    Write-Host "    [INFO] $($pycache.Count) __pycache__ (borrables con Remove-Item -Recurse)" -ForegroundColor Yellow
 } else {
     Write-Host "    [OK] 0 __pycache__" -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------
-# 8. RESULTADO
+# 8. Resultado
 # ------------------------------------------------------------------
 Write-Host "`n============================================================" -ForegroundColor Yellow
 if ($fails -eq 0) {
-    Write-Host " RESULTADO: OK - El proyecto esta limpio y funcional" -ForegroundColor Green
+    Write-Host " RESULTADO: OK" -ForegroundColor Green
 } else {
-    Write-Host " RESULTADO: $fails fallo(s) - Revisar los [FALLA] de arriba" -ForegroundColor Red
+    Write-Host " RESULTADO: $fails fallo(s)" -ForegroundColor Red
 }
 Write-Host "============================================================" -ForegroundColor Yellow
 exit $fails

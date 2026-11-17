@@ -1,23 +1,23 @@
 """
 sources/sitrad_api.py — el bot leyendo la API local de SITRAD PRO en vivo.
 
-Mismas llamadas que el extractor (sitrad_source.py original), pero como módulo reutilizable:
+Endpoints usados (solo lectura):
   GET /instruments                      -> instrumentos del servidor
+  GET /converters                       -> convertidores (si existen)
   GET /instruments/{id}/values          -> variables y valores de un instrumento
   GET /alarms?startDate=..&endDate=..   -> alarmas configuradas en SITRAD que se han disparado
 
-Qué hace de más:
-  * Credenciales desde config / variables de entorno SITRAD_USER y SITRAD_PASSWORD / pregunta al iniciar.
-  * Encuentra solo cuál instrumento es el controlador de la cámara (el que tiene variables como camera 01,
-    Setpoint, REFR, DEFR) o usa el que indiques; avisa si hay varios.
-  * Convierte las variables a los canales del bot. El formato exacto del JSON de tu servidor no está
-    fijado: se buscan los campos de nombre/valor/unidad/fecha por varios nombres habituales. Para ver lo que
-    devuelve de verdad:  python tools/inspect_sitrad_api.py
-  * Una lectura solo se entrega si su fecha es posterior a la última entregada (consultar cada 30 s no
-    duplica datos de un instrumento que se actualiza cada 2 min). Si el instrumento deja de actualizar,
-    las lecturas se detienen y el bot avisa "sin lecturas".
-  * Las alarmas nuevas de SITRAD se entregan una sola vez (new_alarms) para mostrarlas en el chat.
-  * Opcional: guarda cada lectura cruda en sitrad_data/lecturas.jsonl (mismo formato que el extractor).
+Comportamiento:
+  * Credenciales desde config / entorno / prompt.
+  * Descubre el controlador y opcionalmente construye el árbol completo
+    convertidores → instrumentos → canales.
+  * Passthrough: además de los canales del catálogo, ingesta al store
+    cualquier variable con valor válido, usando su nombre SITRAD como
+    nombre de canal. Los canales del catálogo se mapean primero; los demás
+    se añaden sin filtros de plausibilidad (el bot no sabe qué son).
+  * Deduplicación por timestamp: si el instrumento no actualizó, no reingesta.
+  * Alarmas nuevas se entregan una sola vez (new_alarms) y se persisten en
+    sitrad_data/sitrad_alarms.jsonl.
 """
 from __future__ import annotations
 
@@ -28,13 +28,13 @@ import re
 import sys
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 from requests.auth import HTTPBasicAuth
 
-from core.channel_catalog import CONTROLLER_SPECS
+from core.channel_catalog import CONTROLLER_SPECS, norm_col
 from core.contracts import ChannelReading, DataQuality, Snapshot
 from core.sitrad_mapping import key, match_columns, parse_datetime_any, parse_number, parse_state
 
@@ -69,6 +69,7 @@ def _first(d: dict, keys):
         if k in d and d[k] is not None:
             return d[k]
     return None
+
 
 def iter_variables(obj):
     """Recorre el JSON de /values y entrega cada variable (diccionario con nombre y valor).
@@ -109,6 +110,7 @@ def iter_variables(obj):
                 if isinstance(v, (list, dict)):
                     yield from iter_variables(v)
 
+
 # Sensor físico -> flag IsS<n>Enabled del controlador. Un sensor deshabilitado devuelve basura
 # (p. ej. -112 °C) que NO debe entrar como lectura válida.
 SENSOR_INDEX = {"Temp Cámara": 1, "Temp Evaporador": 2}
@@ -129,16 +131,52 @@ def sensor_enabled_flags(variables) -> dict[int, bool]:
     return out
 
 
-def map_variables(variables: list[Variable], channel_map: dict | None = None) -> dict[str, Variable]:
-    """canal del bot -> variable de SITRAD. channel_map {canal: nombre} manda sobre el reconocimiento automático."""
+def map_variables(
+    variables: list[Variable],
+    channel_map: dict | None = None,
+    passthrough: bool = False,
+) -> dict[str, Variable]:
+    """canal del bot -> variable de SITRAD.
+
+    Orden de prioridad:
+      1. match_columns (catálogo canónico: CONTROLLER_SPECS / MULTIPOWER_SPECS).
+      2. channel_map del config (mapea nombres SITRAD concretos a canales del bot).
+      3. Si passthrough=True: cualquier variable no mapeada se entrega con su
+         nombre SITRAD normalizado como nombre de canal. Estas variables NO
+         se filtran por plausibilidad térmica (el bot no sabe qué son).
+    """
     out: dict[str, Variable] = {}
-    for ch, idx in match_columns([v.label for v in variables]).items():
-        out[ch] = variables[idx]
+
+    # 1. Catálogo
+    try:
+        idx_map = match_columns([v.label for v in variables])
+    except Exception:
+        idx_map = {}
+    for ch, idx in idx_map.items():
+        if 0 <= idx < len(variables):
+            out[ch] = variables[idx]
+
+    # 2. channel_map
     for ch, want in (channel_map or {}).items():
         for v in variables:
             if key(v.name) == key(want) or key(v.label) == key(want):
                 out[ch] = v
                 break
+
+    # 3. Passthrough
+    if passthrough:
+        mapped_ids = {id(v) for v in out.values()}
+        existing_channels = set(out.keys())
+        for v in variables:
+            if id(v) in mapped_ids:
+                continue
+            if v.value is None or v.error or not v.enabled:
+                continue
+            ch = norm_col(v.name).strip()
+            if not ch or ch in existing_channels:
+                continue
+            out[ch] = v
+
     return out
 
 
@@ -159,23 +197,24 @@ def resolve_credentials(cfg: dict) -> tuple[str, str]:
                          "en una terminal para que las pregunte.")
     return user, pwd
 
+
 class SitradApi:
-    def __init__(self, base_url: str, user: str, password: str, verify_ssl: bool = False,
-                 timeout: float = 30.0) -> None:
+    """Cliente HTTP contra la API local de SITRAD PRO. Solo lectura."""
+
+    def __init__(self, base_url: str, user: str, password: str,
+                 verify_ssl: bool = False, timeout: float = 30.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(user, password)
         self.session.verify = bool(verify_ssl)
-
         if not verify_ssl:
-            # Certificado local autofirmado de SITRAD: no se valida (en producción, configura el certificado).
             from urllib3.exceptions import InsecureRequestWarning
             warnings.simplefilter("ignore", InsecureRequestWarning)
 
     def get_json(self, path: str, params: dict | None = None) -> dict:
         r = self.session.get(f"{self.base_url}{path}", params=params, timeout=self.timeout,
-                            verify=self.session.verify)
+                             verify=self.session.verify)
         r.raise_for_status()
         # SITRAD declara un charset que no coincide; los bytes reales son UTF-8.
         r.encoding = "utf-8"
@@ -183,10 +222,10 @@ class SitradApi:
         if isinstance(data, dict) and data.get("status") not in (None, 200):
             raise RuntimeError(f"Respuesta inesperada de SITRAD: {str(data)[:200]}")
         return data
+
     def converters(self) -> list[dict]:
         """Convertidores RS-485/RS-232 configurados en SITRAD.
-        Prueba varios endpoints y devuelve [] si ninguno responde (SITRAD PRO
-        de esta instalación no siempre expone /converters)."""
+        Prueba varios endpoints y devuelve [] si ninguno responde."""
         for path in ("/converters", "/converter", "/instruments/converters"):
             try:
                 return list(self.get_json(path).get("results", []))
@@ -197,12 +236,13 @@ class SitradApi:
     def alarms_of(self, instrument_id) -> list[dict]:
         """Alarmas configuradas de un instrumento (si el endpoint existe)."""
         for path in (f"/instruments/{instrument_id}/alarms",
-                    f"/instruments/{instrument_id}/alarms/config"):
+                     f"/instruments/{instrument_id}/alarms/config"):
             try:
                 return list(self.get_json(path).get("results", []))
             except Exception:
                 continue
         return []
+
     def instruments(self) -> list[dict]:
         return list(self.get_json("/instruments").get("results", []))
 
@@ -211,7 +251,8 @@ class SitradApi:
 
     def alarms(self, start: datetime, end: datetime) -> list[dict]:
         fmt = "%Y-%m-%dT%H:%M:%SZ"
-        data = self.get_json("/alarms", params={"startDate": start.strftime(fmt), "endDate": end.strftime(fmt)})
+        data = self.get_json("/alarms", params={"startDate": start.strftime(fmt),
+                                                "endDate": end.strftime(fmt)})
         return list(data.get("results", []))
 
     def close(self) -> None:
@@ -226,18 +267,25 @@ _ALARM_TEXT = ("description", "message", "alarmDescription", "text", "name", "al
 _ALARM_INST = ("instrumentName", "instrument", "deviceName", "equipmentName")
 _ALARM_DATE = ("startDate", "date", "dateTime", "timestamp", "start", "occurredAt", "createdAt", "startTime")
 
-
-def describe_alarm(alarm: dict) -> dict:
-    """Texto, instrumento y hora de una alarma de SITRAD (los nombres de campo se buscan, no se asumen)."""
+def describe_alarm(alarm: dict, names: dict | None = None) -> dict:
     text = _first(alarm, _ALARM_TEXT)
     inst = _first(alarm, _ALARM_INST)
+    if not inst and names:
+        iid = alarm.get("instrumentId")
+        if iid is not None:
+            inst = names.get(int(iid))
     if isinstance(inst, dict):
         inst = _first(inst, _NAME_KEYS)
     when = parse_datetime_any(_first(alarm, _ALARM_DATE))
     if not text:
         text = json.dumps({k: v for k, v in alarm.items() if k != "id"}, ensure_ascii=False)[:140]
-    return {"id": str(alarm.get("id", "")), "text": str(text).strip(), "instrument": str(inst).strip() if inst else "",
-            "when": when, "raw": alarm}
+    return {
+        "id": str(alarm.get("id", "")),
+        "text": str(text).strip(),
+        "instrument": str(inst).strip() if inst else "",
+        "when": when,
+        "raw": alarm,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -245,15 +293,18 @@ def describe_alarm(alarm: dict) -> dict:
 # ----------------------------------------------------------------------
 
 class SitradApiSource:
-    
     """Misma interfaz que CavaRandomSource: poll(now) -> Snapshot."""
 
-    def __init__(self, api: SitradApi, device_id: int, instrument_id=None, instrument_name: str | None = None,
-                 channel_map: dict | None = None, poll_seconds: float = 30.0, alarms_every_s: float = 60.0,
-                 save_raw: bool = False, data_dir: str = "sitrad_data", announce_existing_alarms: bool = False) -> None:
+    def __init__(self, api: SitradApi, device_id: int, instrument_id=None,
+                 instrument_name: str | None = None, channel_map: dict | None = None,
+                 poll_seconds: float = 30.0, alarms_every_s: float = 60.0,
+                 save_raw: bool = False, data_dir: str = "sitrad_data",
+                 announce_existing_alarms: bool = False,
+                 passthrough: bool = True) -> None:
         self.api = api
         self.device_id = int(device_id)
         self.instrument_id = instrument_id
+        self._instrument_names: dict[int, str] = {}
         self.instrument_name = instrument_name
         self.channel_map = channel_map or {}
         self.poll_seconds = float(poll_seconds)
@@ -261,6 +312,7 @@ class SitradApiSource:
         self.save_raw = save_raw
         self.data_dir = Path(data_dir)
         self.announce_existing = announce_existing_alarms
+        self.passthrough = bool(passthrough)
         self._spec = {s.name: s for s in CONTROLLER_SPECS}
         self._last_fetch: datetime | None = None
         self._last_ts: dict[str, datetime] = {}
@@ -269,14 +321,16 @@ class SitradApiSource:
         self._alarm_primed = False
         self._last_alarm_fetch: datetime | None = None
         self.instrument: dict | None = None
-        self.alarms_path = Path(data_dir) / "sitrad_alarms.jsonl"
+        self.alarms_path = self.data_dir / "sitrad_alarms.jsonl"
         if save_raw:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-        
+
+    # ------------------------------------------------------------------
+    # Persistencia de alarmas
+    # ------------------------------------------------------------------
+
     def _save_alarm(self, alarm: dict, raw: dict) -> None:
-        """Persiste la alarma en logs/sitrad_alarms.jsonl (append-only, para consultas históricas)."""
-        import json
-        from datetime import datetime, timezone
+        """Persiste la alarma en sitrad_data/sitrad_alarms.jsonl (append-only)."""
         rec = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "id": alarm.get("id"),
@@ -291,7 +345,11 @@ class SitradApiSource:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
             logger.exception("No pude persistir la alarma.")
-    # ---- descubrimiento ----
+
+    # ------------------------------------------------------------------
+    # Descubrimiento del controlador (instrumento activo)
+    # ------------------------------------------------------------------
+
     def discover(self) -> dict:
         """Elige el instrumento del controlador. Lanza RuntimeError con una explicación si no puede."""
         insts = self.api.instruments()
@@ -299,10 +357,11 @@ class SitradApiSource:
             raise RuntimeError("SITRAD no devolvió ningún instrumento (¿credenciales o servidor correcto?).")
         scored = []
         for ins in insts:
+            self._instrument_names[int(ins.get("id"))] = ins.get("name") or f"Instrumento {ins.get('id')}"
             try:
                 vs = list(iter_variables(self.api.values(ins["id"])))
                 scored.append((ins, len(map_variables(vs, self.channel_map)), len(vs)))
-            except Exception as exc:                                     # un instrumento caído no debe impedir el resto
+            except Exception as exc:
                 logger.warning("No pude leer el instrumento %s: %s", ins.get("id"), exc)
                 scored.append((ins, 0, 0))
         table = "; ".join(f"{i.get('id')}='{i.get('name', '?')}' ({m} canales reconocidos de {n})" for i, m, n in scored)
@@ -326,9 +385,44 @@ class SitradApiSource:
         logger.info("Controlador elegido: id=%s nombre=%s", self.instrument_id, self.instrument.get("name"))
         return self.instrument
 
-    # ---- lecturas ----
-    def _reading(self, ch: str, v: Variable, t: datetime, sensor_flags: dict | None = None) -> ChannelReading:
-        spec = self._spec[ch]
+    # ------------------------------------------------------------------
+    # Lectura de un canal
+    # ------------------------------------------------------------------
+
+    def _infer_spec(self, ch: str, v: Variable):
+        """Spec sintética para canales passthrough (no catalogados)."""
+        from core.channel_catalog import ChannelSpec
+        unit = (v.unit or "").strip()
+        raw = v.value
+        is_state = False
+        if isinstance(raw, bool):
+            is_state = True
+        elif isinstance(raw, (int, float)) and float(raw) in (0.0, 1.0) and unit in ("", "estado"):
+            is_state = True
+        kind = "state" if is_state else "analog"
+        return ChannelSpec(ch, v.name, unit, kind, "otro", None)
+
+    def _reading(self, ch: str, v: Variable, t: datetime,
+                 sensor_flags: dict | None = None) -> ChannelReading:
+        spec = self._spec.get(ch)
+        if spec is None:
+            # Canal passthrough: sin filtros de plausibilidad ni de sensor,
+            # solo sanidad básica (valor parseable).
+            spec = self._infer_spec(ch, v)
+            if not v.enabled:
+                return ChannelReading(self.device_id, ch, None, spec.unit,
+                                      DataQuality.MISSING, t, raw=str(v.value))
+            val = parse_state(v.value) if spec.kind == "state" else parse_number(v.value)
+            if val is None:
+                return ChannelReading(self.device_id, ch, None, spec.unit,
+                                      DataQuality.ERR if v.error else DataQuality.MISSING,
+                                      t, raw=str(v.value))
+            if v.error:
+                return ChannelReading(self.device_id, ch, val, spec.unit,
+                                      DataQuality.ERR, t, raw=str(v.value))
+            return ChannelReading(self.device_id, ch, float(val), spec.unit,
+                                  DataQuality.VALID, t, raw=str(v.value))
+
         idx = SENSOR_INDEX.get(ch)
         if idx is not None and sensor_flags and sensor_flags.get(idx) is False:
             return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
@@ -340,7 +434,8 @@ class SitradApiSource:
             return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
         val = parse_state(v.value) if spec.kind == "state" else parse_number(v.value)
         if val is None:
-            return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.ERR if v.error else DataQuality.MISSING,
+            return ChannelReading(self.device_id, ch, None, spec.unit,
+                                  DataQuality.ERR if v.error else DataQuality.MISSING,
                                   t, raw=str(v.value))
         if v.error:
             return ChannelReading(self.device_id, ch, val, spec.unit, DataQuality.ERR, t, raw=str(v.value))
@@ -356,6 +451,10 @@ class SitradApiSource:
                                    ensure_ascii=False) + "\n")
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Poll
+    # ------------------------------------------------------------------
 
     def poll(self, now: datetime) -> Snapshot:
         empty = Snapshot(source_id="sitrad_api", processing_time=now, readings=())
@@ -376,22 +475,33 @@ class SitradApiSource:
             self._fail_streak = 0
         self._save_raw(now, results)
         variables = list(iter_variables(results))
-        mapped = map_variables(variables, self.channel_map)
+        mapped = map_variables(variables, self.channel_map, passthrough=self.passthrough)
         flags = sensor_enabled_flags(variables)
         out: list[ChannelReading] = []
         for ch, v in mapped.items():
             t = v.ts or now
             last = self._last_ts.get(ch)
             if v.ts is not None and last is not None and v.ts <= last:
-                continue                                    # el instrumento aún no actualizó este dato
+                continue  # el instrumento aún no actualizó este dato
             self._last_ts[ch] = t
             out.append(self._reading(ch, v, t, flags))
         return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
-    def _would_accept(self, ch: str, v: Variable, sensor_flags: dict | None) -> tuple[bool, str]:
-        """Misma lógica que _reading pero devolviendo (aceptada, razón_si_no). Sin construir ChannelReading."""
+
+    # ------------------------------------------------------------------
+    # Filtro de aceptación (para discover_all)
+    # ------------------------------------------------------------------
+
+    def _would_accept(self, ch: str, v: Variable,
+                      sensor_flags: dict | None) -> tuple[bool, str]:
+        """Misma lógica que _reading pero devolviendo (aceptada, razón_si_no)."""
         spec = self._spec.get(ch)
         if spec is None:
-            return False, "canal no catalogado"
+            # Passthrough
+            if not v.enabled:
+                return False, "deshabilitado en SITRAD"
+            if v.value is None or v.error:
+                return False, "sin valor"
+            return True, ""
         if not v.enabled:
             return False, "deshabilitado en SITRAD"
         idx = SENSOR_INDEX.get(ch)
@@ -403,12 +513,15 @@ class SitradApiSource:
                 return False, "fuera de rango físico"
         return True, ""
 
+    # ------------------------------------------------------------------
+    # Árbol completo (para la tool list_converters y el log de arranque)
+    # ------------------------------------------------------------------
+
     def discover_all(self) -> dict:
         """Árbol completo SITRAD: convertidores → instrumentos → canales.
 
-        No selecciona ni cambia el instrumento activo: es informativo. Pensado para
-        la tool list_converters y para el log de arranque. Tolerante a fallos:
-        cada instrumento que no responda se anota con error y el resto sigue.
+        Incluye tanto los canales catalogados como los passthrough.
+        No selecciona ni cambia el instrumento activo: es informativo.
         """
         tree: dict = {"converters": [], "unassigned_instruments": []}
 
@@ -444,14 +557,22 @@ class SitradApiSource:
             conv_id = None if conv_id in (None, 0, "0", "") else str(conv_id)
 
             channels: list[dict] = []
-            unmapped: list[str] = []
+            unmapped_names: list[str] = []
             n_vars = 0
+            n_catalogados = 0
+            n_passthrough = 0
+
             try:
                 raw = self.api.values(ins_id)
                 vs = list(iter_variables(raw))
                 n_vars = len(vs)
-                mapped = map_variables(vs, self.channel_map)
                 flags = sensor_enabled_flags(vs)
+
+                # 2a. Canales del catálogo
+                mapped = map_variables(vs, self.channel_map, passthrough=False)
+                mapped_var_ids = {id(v) for v in mapped.values()}
+                catalog_var_names = {v.name for v in mapped.values()}
+
                 for ch, v in mapped.items():
                     ok, why = self._would_accept(ch, v, flags)
                     channels.append({
@@ -462,9 +583,40 @@ class SitradApiSource:
                         "enabled": v.enabled,
                         "accepted": ok,
                         "reason": why,
+                        "catalogado": True,
                     })
-                mapped_names = {c["variable"] for c in channels}
-                unmapped = sorted(v.name for v in vs if v.name not in mapped_names)
+                    n_catalogados += 1
+
+                # 2b. Canales passthrough
+                existing_channels = {c["canal"] for c in channels}
+                for v in vs:
+                    if id(v) in mapped_var_ids:
+                        continue
+                    if v.value is None or v.error or not v.enabled:
+                        continue
+                    ch = norm_col(v.name).strip()
+                    if not ch or ch in existing_channels:
+                        continue
+                    ok, why = self._would_accept(ch, v, flags)
+                    channels.append({
+                        "canal": ch,
+                        "variable": v.name,
+                        "unit": v.unit,
+                        "value": v.value,
+                        "enabled": v.enabled,
+                        "accepted": ok,
+                        "reason": why,
+                        "catalogado": False,
+                    })
+                    existing_channels.add(ch)
+                    n_passthrough += 1
+
+                # Sample de variables que no están ni en el catálogo ni en channel_map.
+                # Útil para ver qué se ha catalogado y qué es ruido.
+                unmapped_names = sorted(
+                    v.name for v in vs if v.name not in catalog_var_names
+                )[:15]
+
             except Exception as exc:
                 logger.warning("discover_all: no pude leer %s (id=%s): %s", ins_name, ins_id, exc)
 
@@ -478,36 +630,16 @@ class SitradApiSource:
                 "channels": channels,
                 "n_channels_total": len(channels),
                 "n_channels_effective": sum(1 for c in channels if c["accepted"]),
+                "n_channels_catalogados": n_catalogados,
+                "n_channels_passthrough": n_passthrough,
                 "n_variables_total": n_vars,
-                "unmapped_sample": unmapped[:15],
+                "unmapped_sample": unmapped_names,
             }
-
-            # ─── BLOQUE 3.2: catálogo de alarmas del instrumento ───
-            alarm_channels = [
-                {"canal": ch, "variable": v.name,
-                "active": bool(parse_number(v.value)) if v.value is not None else None}
-                for ch, v in mapped.items()
-                if ch.startswith(("Alarma ", "Error Sensor"))
-            ]
-            entry["alarm_channels"] = alarm_channels
-            entry["n_alarm_channels"] = len(alarm_channels)
-
-            try:
-                raw_alarms = self.api.get_json(f"/instruments/{ins_id}/alarms").get("results", [])
-                entry["alarm_catalog"] = [
-                    {"code": a.get("code"), "description": a.get("description"),
-                    "inhibited": a.get("isInhibited"), "recognized": a.get("isRecognized")}
-                    for a in raw_alarms
-                ]
-            except Exception:
-                entry["alarm_catalog"] = []          # endpoint no disponible en esta versión de SITRAD
-            # ─── FIN BLOQUE 3.2 ───
 
             if conv_id and conv_id in by_conv:
                 by_conv[conv_id]["instruments"].append(entry)
             else:
                 tree["unassigned_instruments"].append(entry)
-            
 
         tree["converters"] = list(by_conv.values())
         tree["n_converters"] = len(tree["converters"])
@@ -520,14 +652,26 @@ class SitradApiSource:
             sum(i["n_channels_effective"] for c in tree["converters"] for i in c["instruments"])
             + sum(i["n_channels_effective"] for i in tree["unassigned_instruments"])
         )
+        tree["n_channels_catalogados"] = (
+            sum(i.get("n_channels_catalogados", 0) for c in tree["converters"] for i in c["instruments"])
+            + sum(i.get("n_channels_catalogados", 0) for i in tree["unassigned_instruments"])
+        )
+        tree["n_channels_passthrough"] = (
+            sum(i.get("n_channels_passthrough", 0) for c in tree["converters"] for i in c["instruments"])
+            + sum(i.get("n_channels_passthrough", 0) for i in tree["unassigned_instruments"])
+        )
         return tree
-    
-    # ---- alarmas ----
+
+    # ------------------------------------------------------------------
+    # Alarmas nuevas
+    # ------------------------------------------------------------------
+
     def new_alarms(self, now: datetime) -> list[dict]:
-        """Alarmas de SITRAD que no se habían entregado (descripción en lenguaje simple)."""
+        """Alarmas de SITRAD que no se habían entregado."""
         if self._last_alarm_fetch is not None and (now - self._last_alarm_fetch).total_seconds() < self.alarms_every_s:
             return []
         self._last_alarm_fetch = now
+        desc = describe_alarm(a, self._instrument_names)
         try:
             raw = self.api.alarms(now - timedelta(minutes=15), now)
         except Exception as exc:
@@ -539,10 +683,11 @@ class SitradApiSource:
             if aid in self._alarm_seen:
                 continue
             self._alarm_seen.add(aid)
-            self._save_alarm(describe_alarm(a), a)
-            fresh.append(describe_alarm(a))
+            desc = describe_alarm(a)
+            self._save_alarm(desc, a)
+            fresh.append(desc)
         if not self._alarm_primed:
             self._alarm_primed = True
             if not self.announce_existing:
-                return []                                   # al arrancar no se re-anuncia lo que ya estaba
+                return []  # al arrancar no se re-anuncia lo que ya estaba
         return fresh

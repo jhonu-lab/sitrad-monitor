@@ -1,6 +1,7 @@
 from __future__ import annotations
 # run_reporter
 import argparse
+from pathlib import Path
 import json
 import logging
 import os
@@ -16,15 +17,13 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 def load_config(path: str) -> dict:
-    """Carga y valida mínimamente la configuración desde un archivo JSON."""
-
+    if not os.path.isabs(path) and not os.path.exists(path):
+        alt = _base_dir() / path
+        if alt.exists():
+            path = str(alt)
     if not os.path.exists(path):
-        print(
-            f"ERROR: no existe el archivo de configuración: {path}",
-            file=sys.stderr,
-        )
+        print(f"ERROR: no existe el archivo de configuración: {path}", file=sys.stderr)
         raise SystemExit(1)
-
     try:
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
@@ -35,27 +34,6 @@ def load_config(path: str) -> dict:
             file=sys.stderr,
         )
         raise SystemExit(1)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Monitor multidimensional de Sitrad Pro."
-    )
-
-    parser.add_argument(
-        "--mode",
-        choices=("demo", "sitrad"),
-        default=None,
-        help="Modo de ejecución. Si no se especifica, usa config.json.",
-    )
-
-    parser.add_argument(
-        "--config",
-        default="config.json",
-        help="Ruta del archivo de configuración.",
-    )
-
-    return parser.parse_args()
 
 
 # ============================================================================
@@ -162,15 +140,65 @@ def validate_config(cfg: dict, mode: str) -> None:
 # ============================================================================
 # MAIN
 # ============================================================================
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Monitor multidimensional de Sitrad Pro."
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("demo", "sitrad"),
+        default=None,
+        help="Modo de ejecución del bot. Si no se especifica, usa config.json.",
+    )
+    parser.add_argument(
+        "--config",
+        default="config.json",
+        help="Ruta del archivo de configuración.",
+    )
+    parser.add_argument(
+        "--inspect-excel",
+        metavar="PATH",
+        default=None,
+        help="Analiza un Excel de SITRAD y reporta instrumento y canales. No arranca el bot.",
+    )
+    parser.add_argument(
+        "--inspect-api",
+        action="store_true",
+        help="Consulta SITRAD y reporta convertidores, instrumentos y canales. No arranca el bot.",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        metavar="PATH",
+        help="Con --inspect-excel, guarda el informe en JSON en esta ruta.",
+    )
+    return parser.parse_args()
+
+
+def _base_dir() -> Path:
+    """Carpeta donde viven config.json y logs/. Junto al .exe si está empaquetado,
+    o junto al script si se ejecuta con python."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
 
 def main() -> None:
-
     args = parse_args()
 
-    # ------------------------------------------------------------------
-    # Configuración
-    # ------------------------------------------------------------------
+    # ── Modos de inspección (no arrancan el bot) ──
+    if args.inspect_excel:
+        from tools.inspect_excel import run_inspect_excel
+        rc = run_inspect_excel(args.inspect_excel, args.config, args.output)
+        raise SystemExit(rc)
 
+    if args.inspect_api:
+        from tools.inspect_sitrad_api import main as inspect_api_main
+        sys.argv = [sys.argv[0], "--config", args.config]
+        rc = inspect_api_main()
+        raise SystemExit(rc)
+
+    # ── Modo bot (lo que ya tienes) ──
     cfg = load_config(args.config)
 
     # El argumento CLI tiene prioridad sobre config.json.
@@ -338,6 +366,7 @@ def main() -> None:
             save_raw=bool(sitrad_config.get("save_raw", True)),
             data_dir=sitrad_config.get("data_dir", "sitrad_data"),
             announce_existing_alarms=bool(sitrad_config.get("announce_existing_alarms", False)),
+            passthrough=bool(sitrad_config.get("passthrough", True)),   # ← NUEVO
         )
         try:
             source.discover()
@@ -345,11 +374,13 @@ def main() -> None:
                 try:
                     tree = source.discover_all()
                     logger.info(
-                        "SITRAD: %d convertidor(es), %d instrumento(s), %d/%d canales efectivos.",
+                        "SITRAD: %d convertidor(es), %d instrumento(s), %d canales efectivos "
+                        "(%d catalogados + %d passthrough).",
                         tree.get("n_converters", 0),
                         tree.get("n_instruments", 0),
                         tree.get("n_channels_effective", 0),
-                        tree.get("n_channels_total", 0),
+                        tree.get("n_channels_catalogados", 0),
+                        tree.get("n_channels_passthrough", 0),
                     )
                     for c in tree.get("converters", []):
                         for ins in c.get("instruments", []):
