@@ -56,7 +56,7 @@ class RetryNotifier:
         if ok:
             return True
 
-        self._queue.append((self.clock.now(), text))
+        self._queue.append((self.clock.now(), text, chat_id))
         while len(self._queue) > self.max_retries:
             self._queue.popleft()
         logger.warning(
@@ -88,25 +88,24 @@ class RetryNotifier:
                 return
         self._last_attempt = now
         self._drain_once()
-
     def _drain_once(self) -> None:
         pending = len(self._queue)
         for _ in range(pending):
             if not self._queue:
                 break
-            _, text = self._queue.popleft()
+            item = self._queue.popleft()
+            _, text, chat_id = item if len(item) == 3 else (*item, None)
             try:
-                ok = self.inner.send(text)
+                ok = self.inner.send(text, chat_id=chat_id) if chat_id else self.inner.send(text)
             except Exception:
                 ok = False
             if not ok:
-                self._queue.appendleft((self.clock.now(), text))
+                self._queue.appendleft((self.clock.now(), text, chat_id))
                 logger.warning(
                     "Reintento fallido; quedan %d en cola.",
                     len(self._queue),
                 )
                 return
-
     # ------------------------------------------------------------
     # POLLING DE PREGUNTAS
     # ------------------------------------------------------------

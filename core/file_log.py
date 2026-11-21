@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import requests
+import logging as logger
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from core.contracts import ChannelReading, DataQuality, EventCandidate
 from core.clock import local_tz
@@ -56,15 +58,27 @@ class FileLog:
         if now is None:
             now = datetime.now(timezone.utc)
 
+        day_key = now.astimezone(self.local_tz).strftime("%Y%m%d")
+
+        if self._last_day_key is None:
+            last_day = self._last_observation_day_key()
+            if last_day is not None:
+                self._last_day_key = last_day
+            else:
+                self._last_day_key = day_key
+
+
         if self.rotation_mode == "daily":
-            day_key = now.astimezone(self.local_tz).strftime("%Y%m%d")
             if self._last_day_key is None:
+                mtime = datetime.fromtimestamp(
+                    os.path.getmtime(self.observations_path),
+                    tz=timezone.utc,
+                )
+                self._last_day_key = mtime.astimezone(self.local_tz).strftime("%Y%m%d")
+            else:
                 self._last_day_key = day_key
-                return
-            if day_key != self._last_day_key:
-                self._rotate_observations(suffix=day_key)
-                self._last_day_key = day_key
-                self._prune_old_observations()
+                last_day = self._last_observation_day_key()
+                self._last_day_key = last_day if last_day is not None else day_key  
 
         elif self.rotation_mode == "size":
             if not os.path.exists(self.observations_path):
@@ -121,8 +135,90 @@ class FileLog:
 
     # write() y write_event() sin cambios.
     # ============================================================
+
+    @staticmethod
+    def _split_for_telegram(text: str, limit: int = 4000) -> list[str]:
+        """Corta preferentemente en saltos de línea, luego espacios, luego duro."""
+        if len(text) <= limit:
+            return [text]
+        chunks, remaining = [], text
+        while remaining:
+            if len(remaining) <= limit:
+                chunks.append(remaining)
+                break
+            cut = remaining.rfind("\n", 0, limit)
+            if cut < limit // 2:
+                cut = remaining.rfind(" ", 0, limit)
+            if cut < limit // 2:
+                cut = limit
+            chunks.append(remaining[:cut].rstrip())
+            remaining = remaining[cut:].lstrip("\n")
+        return chunks
+
+
+    def send(self, text: str, chat_id: Optional[str] = None) -> bool:
+        target = str(chat_id or self.chat_id or "").strip()
+        if not target:
+            logger.warning("Telegram: chat_id vacío, no se envía mensaje.")
+            return False
+        if not text:
+            return False
+        chunks = self._split_for_telegram(str(text), 4000)
+        n = len(chunks)
+        if n > 1:
+            logger.info("Telegram: mensaje de %d chars dividido en %d partes.", len(str(text)), n)
+        for i, chunk in enumerate(chunks, start=1):
+            body = f"({i}/{n})\n{chunk}" if n > 1 else chunk
+            try:
+                response = self._get_session("send").post(   # ← con fix #4 ya aplicado
+                    f"{self.base_url}/sendMessage",
+                    json={"chat_id": target, "text": body, "disable_web_page_preview": True},
+                    timeout=self.send_timeout,
+                )
+                response.raise_for_status()
+            except requests.exceptions.RequestException as exc:
+                logger.error("Error enviando parte %d/%d a Telegram: %s", i, n, exc)
+                return False      # RetryNotifier reenviará todo: trade-off aceptado
+        return True
+    
     # LECTURA
     # ============================================================
+    def _last_observation_day_key(self) -> str | None:
+        """Día local (YYYYMMDD) de la última observación del archivo vigente.
+
+        Robusto frente a cambios de mtime: usa el contenido (event_time), no
+        os.path.getmtime, que antivirus/backups/montajes pueden tocar.
+        """
+        try:
+            if not os.path.exists(self.observations_path):
+                return None
+            size = os.path.getsize(self.observations_path)
+            if size == 0:
+                return None
+            with open(self.observations_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                chunk = min(8192, size)
+                f.seek(-chunk, os.SEEK_END)
+                tail = f.read().decode("utf-8", errors="ignore")
+            for line in reversed(tail.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                et = rec.get("event_time")
+                if not et:
+                    continue
+                t = datetime.fromisoformat(et)
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                return t.astimezone(self.local_tz).strftime("%Y%m%d")
+        except (OSError, ValueError):
+            pass
+        return None
+
 
     def read_events(self) -> list[dict[str, Any]]:
         """

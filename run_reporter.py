@@ -608,6 +608,7 @@ def main() -> None:
         device_id=int(cava_config["device_id"]),
         clock=clock,
         levels_provider=detector.consistency_levels,
+        alarms_path=_base_dir() / (cfg.get("sitrad", {}).get("data_dir", "sitrad_data")+ "/sitrad_alarms.jsonl"),
     )
 
     logger.info(

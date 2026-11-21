@@ -65,7 +65,7 @@ class SeriesStore:
 
         series = self._readings.setdefault(key, [])
 
-        if series and reading.event_time < series[-1].event_time:
+        if series and reading.event_time <= series[-1].event_time:
             return
 
         series.append(reading)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from core.channel_catalog import format_channels
@@ -1099,6 +1100,7 @@ class CavaAgent:
         device_id: int = 0,
         clock=None,
         levels_provider=None,
+        alarms_path: "str | Path | None" = None,
     ) -> None:
 
         if llm is None:
@@ -1126,10 +1128,24 @@ class CavaAgent:
         self._clock = clock
         # Callable -> niveles aprendidos por AnomalyDetector (diagnóstico).
         self._levels_provider = levels_provider
+        from pathlib import Path as _P
+        self.alarms_path: _P | None = (_P(alarms_path) if alarms_path else None)
 
     # ============================================================
     # EVENTO
     # ============================================================
+
+    def _resolve_alarms_path(self):
+        """Ruta a sitrad_data/sitrad_alarms.jsonl, independiente del CWD."""
+        from pathlib import Path
+        import sys
+        if self.alarms_path is not None:
+            return self.alarms_path
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).parent
+        else:
+            base = Path(__file__).resolve().parent.parent
+        return base / "sitrad_data" / "sitrad_alarms.jsonl"
 
 
     # ============================================================
@@ -4478,7 +4494,7 @@ class CavaAgent:
                         "code": (rec.get("raw") or {}).get("code"),
                     })
         except Exception as exc:
-            return {"ok": False, "error": f"No pude leer logs/sitrad_alarms.jsonl: {exc}"}
+            return {"ok": False, "error": f"No pude leer {path}: {exc}"}
         out.sort(key=lambda r: r["when"])
         por_codigo: dict[str, int] = {}
         for a in out:

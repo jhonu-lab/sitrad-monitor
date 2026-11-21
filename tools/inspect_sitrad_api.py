@@ -11,10 +11,13 @@ Salida: una línea ✓ por canal válido, ⚠ por canal descartado,
 from __future__ import annotations
 
 import argparse
+from email.mime import base
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from pandas import api
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -184,7 +187,8 @@ def main() -> int:
     for path in ("/swagger.json", "/openapi.json", "/swagger",
                 "/api-docs", "/api/v1/swagger.json", "/api/v1/openapi.json"):
         try:
-            r = api.session.get(f"{api.base_url.rstrip('/api/v1')}{path}", timeout=5)
+            base = api.base_url[:-len("/api/v1")] if api.base_url.endswith("/api/v1") else api.base_url
+            r = api.session.get(f"{base}{path}", timeout=5)
             print(f"  {r.status_code}  {path}")
             if r.ok and "json" in r.headers.get("content-type", ""):
                 spec = r.json()

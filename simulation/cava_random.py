@@ -949,6 +949,11 @@ class CavaRandomSource:
         out = []
 
         for name, unit in ALL_CHANNELS:
+            if name not in values:
+                # Canal del catálogo que el simulador no modela: lo emitimos como MISSING
+                out.append(ChannelReading(
+                    self.device_id, name, None, unit, DataQuality.MISSING, now, ""))
+                continue
             inst = CTRL if name in _CONTROLLER_NAMES else MP
 
             if self._fx["power_cut"] or (

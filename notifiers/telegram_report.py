@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Iterable, Optional
 
+from matplotlib import text
 import requests
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ class TelegramReporter:
         self.poll_interval = float(poll_interval)
         self.send_timeout = int(send_timeout)
         self.group_requires_mention = group_requires_mention
+        self._tls = threading.local()
         self.allowed_user_ids = (
             None if allowed_user_ids is None else {str(u) for u in allowed_user_ids}
         )
@@ -170,9 +172,40 @@ class TelegramReporter:
         self._commands: Queue = Queue()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._session = requests.Session()
 
     # ------------------------------------------------------------------ envío
+    def _get_session(self, kind: str) -> requests.Session:
+        """Una requests.Session por (hilo, kind).
+
+        requests.Session no es thread-safe: el pool de conexiones y el CookieJar
+        se corrompen con concurrencia. La rama de polling y la del reporter
+        comparten este notificador, así que cada hilo necesita su propia sesión.
+        """
+        attr = f"_sess_{kind}"
+        sess = getattr(self._tls, attr, None)
+        if sess is None:
+            sess = requests.Session()
+            setattr(self._tls, attr, sess)
+        return sess
+
+    @staticmethod
+    def _split_for_telegram(text: str, limit: int = 4000) -> list[str]:
+        """Corta preferentemente en saltos de línea, luego espacios, luego duro."""
+        if len(text) <= limit:
+            return [text]
+        chunks, remaining = [], text
+        while remaining:
+            if len(remaining) <= limit:
+                chunks.append(remaining)
+                break
+            cut = remaining.rfind("\n", 0, limit)
+            if cut < limit // 2:
+                cut = remaining.rfind(" ", 0, limit)
+            if cut < limit // 2:
+                cut = limit
+            chunks.append(remaining[:cut].rstrip())
+            remaining = remaining[cut:].lstrip("\n")
+        return chunks
 
     def send(self, text: str, chat_id: Optional[str] = None) -> bool:
         target = str(chat_id or self.chat_id or "").strip()
@@ -181,19 +214,25 @@ class TelegramReporter:
             return False
         if not text:
             return False
+        chunks = self._split_for_telegram(str(text), 4000)
+        n = len(chunks)
+        if n > 1:
+            logger.info("Telegram: mensaje de %d chars dividido en %d partes.",
+                        len(str(text)), n)
         try:
-            response = self._session.post(
-                f"{self.base_url}/sendMessage",
-                json={"chat_id": target, "text": str(text)[:4000],
-                      "disable_web_page_preview": True},
-                timeout=self.send_timeout,
-            )
-            response.raise_for_status()
+            for i, chunk in enumerate(chunks, start=1):
+                body = f"({i}/{n})\n{chunk}" if n > 1 else chunk
+                response = self._get_session("send").post(
+                    f"{self.base_url}/sendMessage",
+                    json={"chat_id": target, "text": body, "disable_web_page_preview": True},
+                    timeout=self.send_timeout,
+                )
+                response.raise_for_status()
             return True
         except requests.exceptions.RequestException as exc:
-            logger.error("Error enviando mensaje a Telegram: %s", exc)
+            logger.error("Error enviando a Telegram (parte %d/%d): %s", i, n, exc)
             return False
-
+    
     # Dentro de class TelegramReporter, después de send()
     def send_photo(self, path: str, caption: str = "", chat_id=None) -> bool:
         target = chat_id or getattr(self, "chat_id", None)
@@ -202,7 +241,7 @@ class TelegramReporter:
             return False
         try:
             with open(path, "rb") as fh:
-                r = self._session.post(
+                r = self._get_session("main").post(
                     f"{self.base_url}/sendPhoto",
                     data={"chat_id": target, "caption": (caption or "")[:1024]},
                     files={"photo": fh},
@@ -235,7 +274,7 @@ class TelegramReporter:
 
     def _identify_bot(self) -> None:
         try:
-            r = self._session.get(f"{self.base_url}/getMe", timeout=10)
+            r = self._get_session("main").get(f"{self.base_url}/getMe", timeout=10)
             r.raise_for_status()
             me = r.json().get("result") or {}
             self.bot_username = me.get("username", "") or ""
@@ -271,7 +310,7 @@ class TelegramReporter:
 
     def _poll_once(self) -> None:
         try:
-            response = self._session.get(
+            response = self._get_session("poll").get(
                 f"{self.base_url}/getUpdates",
                 params={"offset": self._offset, "timeout": self.poll_timeout,
                         "allowed_updates": json.dumps(["message"])},
