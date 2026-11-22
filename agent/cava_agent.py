@@ -3033,15 +3033,33 @@ class CavaAgent:
 
     # ---------------- ¿hay Multipower? ----------------
     multipower_present: bool | None = None     # run_reporter puede fijarlo; si es None se deduce del store
+def _has_multipower(self) -> bool:
+    reg = self._registry()
 
-    def _has_multipower(self) -> bool:
-        """True si hay medidores M1/M2: el flag `multipower_present` manda; si es None se deduce del store."""
-        if self.multipower_present is not None:
-            return bool(self.multipower_present)
+    if reg is not None:
+        # Método oficial del registro
         try:
-            return any(c.startswith(("M1 ", "M2 ")) for c in self.store.channels(device_id=self._dev()))
+            matches = reg.by_type("multipower")
+            if matches:
+                return True
         except Exception:
-            return False
+            logger.exception("Error consultando Multipower en registry.")
+
+        # Respaldo: inspeccionar los instrumentos directamente
+        instruments = getattr(reg, "instruments", []) or []
+
+        for instrument in instruments:
+            if isinstance(instrument, dict):
+                instrument_type = instrument.get("type", "")
+            else:
+                instrument_type = getattr(instrument, "type", "")
+
+            if str(instrument_type).strip().lower() == "multipower":
+                return True
+
+        return False
+
+    return bool(getattr(self, "multipower_present", False))
 
     def _tool_data_coverage(self, arguments: dict[str, Any]) -> dict[str, Any]:
         from core.channel_catalog import SPEC_BY_NAME
