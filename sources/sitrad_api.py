@@ -266,27 +266,211 @@ class SitradApi:
 _ALARM_TEXT = ("description", "message", "alarmDescription", "text", "name", "alarmName", "type", "alarmType", "title")
 _ALARM_INST = ("instrumentName", "instrument", "deviceName", "equipmentName")
 _ALARM_DATE = ("startDate", "date", "dateTime", "timestamp", "start", "occurredAt", "createdAt", "startTime")
-
 def describe_alarm(alarm: dict, names: dict | None = None) -> dict:
     text = _first(alarm, _ALARM_TEXT)
     inst = _first(alarm, _ALARM_INST)
-    if not inst and names:
-        iid = alarm.get("instrumentId")
-        if iid is not None:
-            inst = names.get(int(iid))
+    inst_id = alarm.get("instrumentId")
+    if not inst and names and inst_id is not None:
+        try:
+            inst = names.get(int(inst_id))
+        except (ValueError, TypeError):
+            pass
     if isinstance(inst, dict):
         inst = _first(inst, _NAME_KEYS)
     when = parse_datetime_any(_first(alarm, _ALARM_DATE))
     if not text:
-        text = json.dumps({k: v for k, v in alarm.items() if k != "id"}, ensure_ascii=False)[:140]
+        text = json.dumps({k: v for k, v in alarm.items() if k != "id"},
+                          ensure_ascii=False)[:140]
+    try:
+        inst_id_int = int(inst_id) if inst_id is not None else None
+    except (ValueError, TypeError):
+        inst_id_int = None
     return {
         "id": str(alarm.get("id", "")),
         "text": str(text).strip(),
         "instrument": str(inst).strip() if inst else "",
+        "instrument_id": inst_id_int,
         "when": when,
         "raw": alarm,
     }
 
+# ----------------------------------------------------------------------
+# Registro multi-instrumento
+# ----------------------------------------------------------------------
+
+@dataclass
+class InstrumentInfo:
+    instrument_id: int
+    name: str
+    type: str               # tc900e | multipower | generic
+    device_id: int          # 1000 + instrument_id
+    converter_id: str | None
+    converter_name: str | None
+    channels: list[str]     # nombres canónicos del catálogo para este tipo
+    channel_map: dict
+    n_channels_effective: int
+    model: str = ""
+    address: str | None = None
+    status: str | None = None
+
+
+class InstrumentRegistry:
+    """Descubre y clasifica todos los instrumentos del servidor SITRAD."""
+
+    def __init__(
+        self,
+        api: "SitradApi",
+        type_overrides: dict | None = None,
+        channel_maps_by_type: dict | None = None,
+        default_channel_map: dict | None = None,
+    ) -> None:
+        self.api = api
+        self.type_overrides = {str(k): str(v) for k, v in (type_overrides or {}).items()}
+        self.channel_maps_by_type = channel_maps_by_type or {}
+        self.default_channel_map = default_channel_map or {}
+        self.instruments: dict[int, InstrumentInfo] = {}
+        self._converters: list[dict] = []
+
+    # ----------------------------------------------------------------
+    # Descubrimiento
+    # ----------------------------------------------------------------
+
+    def discover_all(self) -> dict:
+        from core.channel_catalog import (
+            detect_instrument_type, channels_for_type, channel_map_for_type,
+        )
+
+        try:
+            self._converters = list(self.api.converters())
+        except Exception:
+            self._converters = []
+        conv_by_id = {str(c.get("id")): c for c in self._converters if c.get("id")}
+
+        try:
+            raw_instruments = self.api.instruments()
+        except Exception as exc:
+            logger.warning("InstrumentRegistry: no pude listar instrumentos: %s", exc)
+            return self._tree()
+
+        for ins in raw_instruments:
+            ins_id = ins.get("id")
+            if ins_id is None:
+                continue
+            ins_id = int(ins_id)
+            ins_name = ins.get("name") or f"Instrumento {ins_id}"
+
+            try:
+                raw = self.api.values(ins_id)
+                variables = list(iter_variables(raw))
+            except Exception as exc:
+                logger.warning("InstrumentRegistry: no pude leer %s (id=%s): %s",
+                               ins_name, ins_id, exc)
+                continue
+
+            labels = [v.label for v in variables]
+
+            itype = self.type_overrides.get(str(ins_id)) or detect_instrument_type(labels)
+            device_id = 1000 + ins_id
+
+            if itype in self.channel_maps_by_type:
+                channel_map = self.channel_maps_by_type[itype]
+            elif itype in ("tc900e", "multipower"):
+                channel_map = channel_map_for_type(itype)
+            else:
+                channel_map = self.default_channel_map
+
+            catalog = channels_for_type(itype)
+            channels = [c["name"] for c in catalog]
+
+            try:
+                mapped = map_variables(variables, channel_map, passthrough=False)
+                n_eff = len(mapped)
+            except Exception:
+                n_eff = 0
+
+            conv_id = ins.get("converterId")
+            conv_id = None if conv_id in (None, 0, "0", "") else str(conv_id)
+            conv_name = None
+            if conv_id and conv_id in conv_by_id:
+                c = conv_by_id[conv_id]
+                conv_name = c.get("name") or c.get("description")
+
+            self.instruments[device_id] = InstrumentInfo(
+                instrument_id=ins_id,
+                name=ins_name,
+                type=itype,
+                device_id=device_id,
+                converter_id=conv_id,
+                converter_name=conv_name,
+                channels=channels,
+                channel_map=channel_map,
+                n_channels_effective=n_eff,
+                model=str(ins.get("modelId") or ins.get("modelVersion") or ""),
+                address=ins.get("address"),
+                status=ins.get("status"),
+            )
+
+        logger.info(
+            "InstrumentRegistry: %d convertidor(es), %d instrumento(s): %s.",
+            len(self._converters), len(self.instruments), self.summary_text(),
+        )
+        return self._tree()
+
+    # ----------------------------------------------------------------
+    # Consulta
+    # ----------------------------------------------------------------
+
+    def _tree(self) -> dict:
+        by_conv: dict[str, dict] = {}
+        for c in self._converters:
+            cid = str(c.get("id", ""))
+            if cid:
+                by_conv[cid] = {
+                    "id": cid,
+                    "name": c.get("name") or c.get("description") or f"Convertidor {cid}",
+                    "instruments": [],
+                }
+        unassigned: list[dict] = []
+        for info in self.instruments.values():
+            entry = {
+                "id": info.instrument_id,
+                "name": info.name,
+                "type": info.type,
+                "device_id": info.device_id,
+                "converterId": info.converter_id,
+                "n_channels_effective": info.n_channels_effective,
+                "n_channels_catalogados": len(info.channels),
+            }
+            if info.converter_id and info.converter_id in by_conv:
+                by_conv[info.converter_id]["instruments"].append(entry)
+            else:
+                unassigned.append(entry)
+        return {
+            "converters": list(by_conv.values()),
+            "unassigned_instruments": unassigned,
+            "n_converters": len(by_conv),
+            "n_instruments": len(self.instruments),
+        }
+
+    def names_map(self) -> dict[int, str]:
+        return {i.instrument_id: i.name for i in self.instruments.values()}
+
+    def device_ids(self) -> list[int]:
+        return sorted(self.instruments.keys())
+
+    def by_device_id(self, device_id: int) -> InstrumentInfo | None:
+        return self.instruments.get(int(device_id))
+
+    def by_type(self, itype: str) -> list[InstrumentInfo]:
+        return [i for i in self.instruments.values() if i.type == itype]
+
+    def summary_text(self) -> str:
+        if not self.instruments:
+            return "ninguno"
+        by_type: dict[str, int] = {}
+        for info in self.instruments.values():
+            by_type[info.type] = by_type.get(info.type, 0) + 1
+        return ", ".join(f"{n}×{t}" for t, n in sorted(by_type.items()))
 
 # ----------------------------------------------------------------------
 # Fuente del bot
@@ -295,14 +479,17 @@ def describe_alarm(alarm: dict, names: dict | None = None) -> dict:
 class SitradApiSource:
     """Misma interfaz que CavaRandomSource: poll(now) -> Snapshot."""
 
-    def __init__(self, api: SitradApi, device_id: int, instrument_id=None,
+    def __init__(self, api: SitradApi, device_id: int = 201, instrument_id=None,
                  instrument_name: str | None = None, channel_map: dict | None = None,
                  poll_seconds: float = 30.0, alarms_every_s: float = 60.0,
                  save_raw: bool = False, data_dir: str = "sitrad_data",
                  announce_existing_alarms: bool = False,
-                 passthrough: bool = True) -> None:
+                 passthrough: bool = True,
+                 instruments_override: dict | None = None,
+                 channel_maps_by_type: dict | None = None,
+                 registry: "InstrumentRegistry | None" = None) -> None:
         self.api = api
-        self.device_id = int(device_id)
+        self.device_id = int(device_id)              # legacy single
         self.instrument_id = instrument_id
         self._instrument_names: dict[int, str] = {}
         self.instrument_name = instrument_name
@@ -315,7 +502,7 @@ class SitradApiSource:
         self.passthrough = bool(passthrough)
         self._spec = {s.name: s for s in CONTROLLER_SPECS}
         self._last_fetch: datetime | None = None
-        self._last_ts: dict[str, datetime] = {}
+        self._last_ts: dict[tuple[int, str], datetime] = {}   # (device_id, channel) → ts
         self._fail_streak = 0
         self._alarm_seen: set[str] = set()
         self._alarm_primed = False
@@ -325,16 +512,20 @@ class SitradApiSource:
         if save_raw:
             self.data_dir.mkdir(parents=True, exist_ok=True)
 
+        # Multi-instrumento
+        self.registry: InstrumentRegistry | None = registry
+        self.instruments_override = instruments_override or {}
+        self.channel_maps_by_type = channel_maps_by_type or {}
+
     # ------------------------------------------------------------------
     # Persistencia de alarmas
     # ------------------------------------------------------------------
-
     def _save_alarm(self, alarm: dict, raw: dict) -> None:
-        """Persiste la alarma en sitrad_data/sitrad_alarms.jsonl (append-only)."""
         rec = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "id": alarm.get("id"),
             "instrument": alarm.get("instrument"),
+            "instrument_id": alarm.get("instrument_id"),
             "text": alarm.get("text"),
             "when": alarm["when"].isoformat() if alarm.get("when") else None,
             "raw": raw,
@@ -349,41 +540,48 @@ class SitradApiSource:
     # ------------------------------------------------------------------
     # Descubrimiento del controlador (instrumento activo)
     # ------------------------------------------------------------------
-
     def discover(self) -> dict:
-        """Elige el instrumento del controlador. Lanza RuntimeError con una explicación si no puede."""
-        insts = self.api.instruments()
-        if not insts:
-            raise RuntimeError("SITRAD no devolvió ningún instrumento (¿credenciales o servidor correcto?).")
-        scored = []
-        for ins in insts:
-            self._instrument_names[int(ins.get("id"))] = ins.get("name") or f"Instrumento {ins.get('id')}"
-            try:
-                vs = list(iter_variables(self.api.values(ins["id"])))
-                scored.append((ins, len(map_variables(vs, self.channel_map)), len(vs)))
-            except Exception as exc:
-                logger.warning("No pude leer el instrumento %s: %s", ins.get("id"), exc)
-                scored.append((ins, 0, 0))
-        table = "; ".join(f"{i.get('id')}='{i.get('name', '?')}' ({m} canales reconocidos de {n})" for i, m, n in scored)
-        logger.info("Instrumentos en SITRAD: %s", table)
+        """Descubre todos los instrumentos y elige el primario para compatibilidad.
+
+        En multi-instrumento, NO falla si no hay un TC-900E configurado: solo loguea.
+        El registry queda construido y `poll()` lo usará.
+        """
+        if self.registry is None:
+            self.registry = InstrumentRegistry(
+                self.api,
+                type_overrides=self.instruments_override,
+                channel_maps_by_type=self.channel_maps_by_type,
+                default_channel_map=self.channel_map,
+            )
+            self.registry.discover_all()
+
+        self._instrument_names = self.registry.names_map()
+
+        # Instrumento configurado explícitamente
         if self.instrument_id is not None:
-            sel = [i for i, _, _ in scored if str(i.get("id")) == str(self.instrument_id)]
-        elif self.instrument_name:
-            sel = [i for i, _, _ in scored if key(self.instrument_name) in key(i.get("name", ""))]
-        else:
-            cands = [i for i, m, _ in scored if m >= 3]
-            if len(cands) > 1:
-                raise RuntimeError("Hay varios instrumentos que parecen controladores de cámara: " + table +
-                                   ". Indica cuál con sitrad.instrument_id o sitrad.instrument_name en config.json.")
-            sel = cands
-        if not sel:
-            raise RuntimeError("No encontré el controlador de la cámara. Instrumentos: " + table +
-                               ". Corre tools/inspect_sitrad_api.py para ver cómo se llaman sus variables, o indica "
-                               "sitrad.instrument_id / sitrad.channel_map en config.json.")
-        self.instrument = sel[0]
-        self.instrument_id = self.instrument["id"]
-        logger.info("Controlador elegido: id=%s nombre=%s", self.instrument_id, self.instrument.get("name"))
-        return self.instrument
+            for info in self.registry.instruments.values():
+                if info.instrument_id == int(self.instrument_id):
+                    self.instrument = {
+                        "id": info.instrument_id, "name": info.name,
+                        "type": info.type, "device_id": info.device_id,
+                    }
+                    logger.info("Instrumento configurado: id=%s nombre=%s tipo=%s device_id=%d",
+                                info.instrument_id, info.name, info.type, info.device_id)
+                    return self.instrument
+
+        # Fallback: primer TC-900E, o el primero
+        thermal = self.registry.by_type("tc900e")
+        first = thermal[0] if thermal else next(iter(self.registry.instruments.values()), None)
+        if first:
+            self.instrument = {
+                "id": first.instrument_id, "name": first.name,
+                "type": first.type, "device_id": first.device_id,
+            }
+            self.instrument_id = first.instrument_id
+            return self.instrument
+
+        logger.warning("No encontré instrumentos en SITRAD.")
+        return {}
 
     # ------------------------------------------------------------------
     # Lectura de un canal
@@ -401,66 +599,77 @@ class SitradApiSource:
             is_state = True
         kind = "state" if is_state else "analog"
         return ChannelSpec(ch, v.name, unit, kind, "otro", None)
-
     def _reading(self, ch: str, v: Variable, t: datetime,
-                 sensor_flags: dict | None = None) -> ChannelReading:
+                 sensor_flags: dict | None = None,
+                 device_id: int | None = None) -> ChannelReading:
+        dev = device_id if device_id is not None else self.device_id
         spec = self._spec.get(ch)
         if spec is None:
-            # Canal passthrough: sin filtros de plausibilidad ni de sensor,
-            # solo sanidad básica (valor parseable).
             spec = self._infer_spec(ch, v)
             if not v.enabled:
-                return ChannelReading(self.device_id, ch, None, spec.unit,
-                                      DataQuality.MISSING, t, raw=str(v.value))
+                return ChannelReading(dev, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
             val = parse_state(v.value) if spec.kind == "state" else parse_number(v.value)
             if val is None:
-                return ChannelReading(self.device_id, ch, None, spec.unit,
+                return ChannelReading(dev, ch, None, spec.unit,
                                       DataQuality.ERR if v.error else DataQuality.MISSING,
                                       t, raw=str(v.value))
             if v.error:
-                return ChannelReading(self.device_id, ch, val, spec.unit,
-                                      DataQuality.ERR, t, raw=str(v.value))
-            return ChannelReading(self.device_id, ch, float(val), spec.unit,
-                                  DataQuality.VALID, t, raw=str(v.value))
+                return ChannelReading(dev, ch, val, spec.unit, DataQuality.ERR, t, raw=str(v.value))
+            return ChannelReading(dev, ch, float(val), spec.unit, DataQuality.VALID, t, raw=str(v.value))
 
         idx = SENSOR_INDEX.get(ch)
         if idx is not None and sensor_flags and sensor_flags.get(idx) is False:
-            return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
+            return ChannelReading(dev, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
         if spec.kind == "analog" and spec.unit == "°C":
             x = parse_number(v.value)
             if x is not None and not (TEMP_PLAUSIBLE[0] <= x <= TEMP_PLAUSIBLE[1]):
-                return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
+                return ChannelReading(dev, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
         if not v.enabled:
-            return ChannelReading(self.device_id, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
+            return ChannelReading(dev, ch, None, spec.unit, DataQuality.MISSING, t, raw=str(v.value))
         val = parse_state(v.value) if spec.kind == "state" else parse_number(v.value)
         if val is None:
-            return ChannelReading(self.device_id, ch, None, spec.unit,
+            return ChannelReading(dev, ch, None, spec.unit,
                                   DataQuality.ERR if v.error else DataQuality.MISSING,
                                   t, raw=str(v.value))
         if v.error:
-            return ChannelReading(self.device_id, ch, val, spec.unit, DataQuality.ERR, t, raw=str(v.value))
-        return ChannelReading(self.device_id, ch, float(val), spec.unit, DataQuality.VALID, t, raw=str(v.value))
-
-    def _save_raw(self, now: datetime, results) -> None:
+            return ChannelReading(dev, ch, val, spec.unit, DataQuality.ERR, t, raw=str(v.value))
+        return ChannelReading(dev, ch, float(val), spec.unit, DataQuality.VALID, t, raw=str(v.value))
+    def _save_raw(self, now: datetime, results, info: "InstrumentInfo | None" = None) -> None:
         if not self.save_raw:
             return
         try:
+            if info is not None:
+                rec = {
+                    "collectedAt": now.isoformat(),
+                    "instrumentId": info.instrument_id,
+                    "instrumentName": info.name,
+                    "values": results,
+                }
+            else:
+                rec = {
+                    "collectedAt": now.isoformat(),
+                    "instruments": [{"instrument": self.instrument, "values": results}],
+                }
             with (self.data_dir / "lecturas.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"collectedAt": now.isoformat(),
-                                    "instruments": [{"instrument": self.instrument, "values": results}]},
-                                   ensure_ascii=False) + "\n")
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception:
             pass
 
     # ------------------------------------------------------------------
     # Poll
     # ------------------------------------------------------------------
-
     def poll(self, now: datetime) -> Snapshot:
         empty = Snapshot(source_id="sitrad_api", processing_time=now, readings=())
         if self._last_fetch is not None and (now - self._last_fetch).total_seconds() < self.poll_seconds:
             return empty
         self._last_fetch = now
+
+        if self.registry is not None and self.registry.instruments:
+            return self._poll_multi(now)
+        return self._poll_single(now)
+
+    def _poll_single(self, now: datetime) -> Snapshot:
+        empty = Snapshot(source_id="sitrad_api", processing_time=now, readings=())
         try:
             if self.instrument_id is None:
                 self.discover()
@@ -480,11 +689,39 @@ class SitradApiSource:
         out: list[ChannelReading] = []
         for ch, v in mapped.items():
             t = v.ts or now
-            last = self._last_ts.get(ch)
+            key = (self.device_id, ch)
+            last = self._last_ts.get(key)
             if v.ts is not None and last is not None and v.ts <= last:
-                continue  # el instrumento aún no actualizó este dato
-            self._last_ts[ch] = t
-            out.append(self._reading(ch, v, t, flags))
+                continue
+            self._last_ts[key] = t
+            out.append(self._reading(ch, v, t, flags, device_id=self.device_id))
+        return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
+
+    def _poll_multi(self, now: datetime) -> Snapshot:
+        out: list[ChannelReading] = []
+        for info in self.registry.instruments.values():
+            try:
+                results = self.api.values(info.instrument_id)
+            except Exception as exc:
+                self._fail_streak += 1
+                if self._fail_streak in (1, 5) or self._fail_streak % 30 == 0:
+                    logger.warning("No pude leer instrumento %s (id=%s): %s",
+                                   info.name, info.instrument_id, exc)
+                continue
+            self._save_raw(now, results, info)
+            variables = list(iter_variables(results))
+            mapped = map_variables(variables, info.channel_map, passthrough=self.passthrough)
+            flags = sensor_enabled_flags(variables)
+            for ch, v in mapped.items():
+                t = v.ts or now
+                key = (info.device_id, ch)
+                last = self._last_ts.get(key)
+                if v.ts is not None and last is not None and v.ts <= last:
+                    continue
+                self._last_ts[key] = t
+                out.append(self._reading(ch, v, t, flags, device_id=info.device_id))
+        if self._fail_streak:
+            self._fail_streak = 0
         return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
 
     # ------------------------------------------------------------------
@@ -665,29 +902,30 @@ class SitradApiSource:
     # ------------------------------------------------------------------
     # Alarmas nuevas
     # ------------------------------------------------------------------
-
     def new_alarms(self, now: datetime) -> list[dict]:
-        """Alarmas de SITRAD que no se habían entregado."""
-        if self._last_alarm_fetch is not None and (now - self._last_alarm_fetch).total_seconds() < self.alarms_every_s:
+        if (self._last_alarm_fetch is not None
+                and (now - self._last_alarm_fetch).total_seconds() < self.alarms_every_s):
             return []
         self._last_alarm_fetch = now
-        desc = describe_alarm(a, self._instrument_names)
         try:
             raw = self.api.alarms(now - timedelta(minutes=15), now)
         except Exception as exc:
             logger.warning("No pude consultar las alarmas de SITRAD: %s", exc)
             return []
-        fresh = []
+        names_map = self._instrument_names or (
+            self.registry.names_map() if self.registry else {}
+        )
+        fresh: list[dict] = []
         for a in raw:
             aid = str(a.get("id", json.dumps(a, sort_keys=True, default=str)))
             if aid in self._alarm_seen:
                 continue
             self._alarm_seen.add(aid)
-            desc = describe_alarm(a)
+            desc = describe_alarm(a, names_map)
             self._save_alarm(desc, a)
             fresh.append(desc)
         if not self._alarm_primed:
             self._alarm_primed = True
             if not self.announce_existing:
-                return []  # al arrancar no se re-anuncia lo que ya estaba
+                return []
         return fresh

@@ -527,6 +527,10 @@ class CavaAgent:
                                         "description": "Filtra por nombre de instrumento (substring)."},
                         "codigo": {"type": "string",
                                    "description": "Filtra por código o texto de alarma (substring)."},
+                                                "instrumento_id": {
+                            "type": "integer",
+                            "description": "Filtra por id numérico de instrumento (opcional).",
+                        },
                     },
                     "required": [],
                 },
@@ -1089,7 +1093,6 @@ class CavaAgent:
     # ============================================================
     # CONSTRUCTOR
     # ============================================================
-
     def __init__(
         self,
         llm,
@@ -1100,7 +1103,8 @@ class CavaAgent:
         device_id: int = 0,
         clock=None,
         levels_provider=None,
-        alarms_path: "str | Path | None" = None,
+        alarms_path=None,
+        registry_provider=None,
     ) -> None:
 
         if llm is None:
@@ -1130,7 +1134,65 @@ class CavaAgent:
         self._levels_provider = levels_provider
         from pathlib import Path as _P
         self.alarms_path: _P | None = (_P(alarms_path) if alarms_path else None)
+        self.registry_provider = registry_provider
+        self._dev: int | None = None
 
+
+
+    # ============================================================
+    # REGISTRY MULTI-INSTRUMENTO
+    # ============================================================
+
+    def _registry(self):
+        """Devuelve el InstrumentRegistry si está disponible."""
+        if self.registry_provider is None:
+            return None
+        try:
+            return self.registry_provider()
+        except Exception:
+            logger.exception("Fallo obteniendo registry.")
+            return None
+
+    def _has_multipower(self) -> bool:
+        reg = self._registry()
+        if reg is not None:
+            return bool(reg.by_type("multipower"))
+        return bool(getattr(self, "multipower_present", False))
+
+    def _instrument_summary(self) -> str:
+        reg = self._registry()
+        if reg is None or not reg.instruments:
+            return ""
+        lines = ["INSTRUMENTOS MONITORIZADOS:"]
+        for device_id in reg.device_ids():
+            info = reg.by_device_id(device_id)
+            if info is None:
+                continue
+            lines.append(
+                f"- {info.name} (instrument_id={info.instrument_id}, device_id={info.device_id}, "
+                f"tipo={info.type}, {info.n_channels_effective} canales efectivos)"
+            )
+        return "\n".join(lines)
+
+    def _resolve_device_for_question(self, q: str) -> int | None:
+        """Resuelve 'cava 1', 'multipower', etc. a un device_id concreto."""
+        reg = self._registry()
+        if reg is None or not reg.instruments:
+            return None
+        m = re.search(r"\b(?:cava|camara|cámara|instrumento|equipo)\s*(\d+)", q)
+        if m:
+            idx = int(m.group(1)) - 1
+            device_ids = reg.device_ids()
+            if 0 <= idx < len(device_ids):
+                return device_ids[idx]
+        if "multipower" in q or "medidor" in q:
+            mp = [i.device_id for i in reg.by_type("multipower")]
+            if len(mp) == 1:
+                return mp[0]
+        thermal = [i.device_id for i in reg.by_type("tc900e")]
+        if len(thermal) == 1:
+            return thermal[0]
+        return None
     # ============================================================
     # EVENTO
     # ============================================================
@@ -1282,7 +1344,7 @@ class CavaAgent:
         from datetime import timedelta
         from core.clock import local_tz
 
-        dev = self._device_id()
+        dev = self._dev()
         tz = local_tz()
         known = set(self.store.channels(device_id=dev))
         span = float(getattr(self.store, "max_hours", 24.0)) * 60.0
@@ -1635,8 +1697,8 @@ class CavaAgent:
 
         if not question or not question.strip():
             return None
-
         question = question.strip()
+        self._dev = self._resolve_device_for_question(self._norm(question))
         routed = self._route_question(question)
         if routed is not None:
             if self.conversations is not None and user_key:
@@ -1651,7 +1713,7 @@ class CavaAgent:
             # ----------------------------------------------------
 
             known = self.store.channels(
-                device_id=self._device_id()
+                device_id=self._dev()
             )
 
             if known:
@@ -1680,9 +1742,12 @@ class CavaAgent:
                 + channels_line
             )
 
+            summary = self._instrument_summary()
+            if summary:
+                system += "\n\n" + summary
             if not self._has_multipower():
-                system += ("\n\nHARDWARE: Esta instalación SOLO tiene controlador (TC-900E). No hay Multipower, "
-                           "ni potencia, ni tensión, ni energía. No menciones M1/M2.")
+                system += ("\n\nNOTA: No hay Multipower en esta instalación. "
+                           "No menciones M1/M2, potencia, tensión ni energía.")
 
             alias = self._alias_block(known)
             if alias:
@@ -1782,6 +1847,8 @@ class CavaAgent:
         if u.startswith("d"):
             return v * 1440.0
         return v
+
+
     def _route_question(self, question: str) -> str | None:
         if not self.use_router:
             return None
@@ -2050,9 +2117,9 @@ class CavaAgent:
             if not parts and (has("producto", "la carga") or _prod is not None):
                 r = _ex("controller_summary", {"tema": "producto"})
                 parts.append(r.get("respuesta_base") or r.get("error") or "No pude consultar el producto.")
-            if not parts and (getattr(self, "scope_controller_only", False) or not self._has_multipower()) and has(
-                    "energia", "consumo", "kwh", "kilovatio", "potencia", "electric", "tension", "voltaje",
-                    "multipower", "medidor"):
+            if not parts and not self._has_multipower() and has(
+                    "energia", "consumo", "kwh", "kilovatio", "potencia", "electric",
+                    "tension", "voltaje", "multipower", "medidor"):
                 parts.append("No tengo medidor de energía en esta instalación: solo el controlador de la cámara "
                              "(temperatura, compresor, deshielo, puerta). No puedo informar consumo, potencia ni tensión.")
         except Exception:
@@ -2116,7 +2183,7 @@ class CavaAgent:
     def _render_instruments(self) -> str:
         from core.channel_catalog import CONTROLLER_SPECS, SPEC_BY_NAME
         try:
-            present = set(self.store.channels(device_id=self._device_id()))
+            present = set(self.store.channels(device_id=self._dev()))
         except Exception:
             present = set()
 
@@ -2392,7 +2459,7 @@ class CavaAgent:
                 out.append("⚠️ Esa hora de entrada es posterior a ahora: empezaré a contar cuando llegue.")
             out.append(f"Límite que vigilo ahora: {str(lim).rstrip('0').rstrip('.').replace('.', ',')} °C"
                        + (f" (el más estricto: {who})." if who else " (el de la cámara)."))
-            dev = self._device_id()
+            dev = self._dev()
             from analysis.diagnosis import DEFAULT_CFG
             temp = self.store.get_series(dev, DEFAULT_CFG["ch_temp"], minutes=24 * 60.0)
             for r in assess_loads([load], temp, cfg.limit_c, now, cfg.product_rules):
@@ -2407,7 +2474,7 @@ class CavaAgent:
         from analysis.diagnosis import DEFAULT_CFG
 
         cfg = self._cfg_now()
-        dev = self._device_id()
+        dev = self._dev()
         now = self._now_utc()
         tema = str(arguments.get("tema", "")).lower()
         minutes = float(arguments.get("minutos", 1440.0) or 1440.0)
@@ -2461,7 +2528,7 @@ class CavaAgent:
         from analysis.load_report import render_load_report
 
         cfg = self._cfg_now()
-        dev = self._device_id()
+        dev = self._dev()
         now = self._now_utc()
         loads = self._loads_for_report(arguments.get("producto"), now)
         if not loads:
@@ -2477,7 +2544,7 @@ class CavaAgent:
         from analysis.status_report import render_status
 
         cfg = self._cfg_now()
-        dev = self._device_id()
+        dev = self._dev()
         now = self._now_utc()
         if DEFAULT_CFG["ch_temp"] not in set(self.store.channels(device_id=dev)):
             return {"ok": False, "error": "No hay datos de la termocupla."}
@@ -2501,7 +2568,7 @@ class CavaAgent:
 
         cfg = self._cfg_now()
         detail = bool(arguments.get("detalle"))
-        dev = self._device_id()
+        dev = self._dev()
         now = self._now_utc()
         ch_t = DEFAULT_CFG["ch_temp"]
         if ch_t not in set(self.store.channels(device_id=dev)):
@@ -2572,7 +2639,7 @@ class CavaAgent:
         from analysis.diagnosis import DEFAULT_CFG
 
         cfg = self._cfg_now()
-        dev = self._device_id()
+        dev = self._dev()
         ch_t = DEFAULT_CFG["ch_temp"]
         if ch_t not in set(self.store.channels(device_id=dev)):
             return {"ok": False, "error": f"No hay datos del canal de temperatura ({ch_t})."}
@@ -2630,7 +2697,7 @@ class CavaAgent:
         except ImportError:
             return {"ok": False, "error": "Falta matplotlib (pip install matplotlib)."}
 
-        dev = self._device_id()
+        dev = self._dev()
         canales = arguments.get("canales")
         if isinstance(canales, str):
             canales = [canales]
@@ -2785,7 +2852,7 @@ class CavaAgent:
 
     def _history_span(self):
         """(desde, hasta, horas, lecturas_por_canal) de lo que hay en el almacén, o None si está vacío."""
-        dev = self._device_id()
+        dev = self._dev()
         retention = float(getattr(self.store, "max_hours", 24.0)) * 60.0
         first = last = None
         per: dict[str, int] = {}
@@ -2886,7 +2953,7 @@ class CavaAgent:
     def _tool_data_quality(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Cobertura, huecos y antigüedad por canal. Con `canal` solo ese canal."""
         from analysis.quality import channel_quality
-        dev = self._device_id()
+        dev = self._dev()
         try:
             minutes = float(arguments.get("minutos") or 1440.0)
         except (TypeError, ValueError):
@@ -2924,12 +2991,12 @@ class CavaAgent:
 
     def _series_for(self, ch: str, d0: datetime, d1: datetime):
         retention = float(getattr(self.store, "max_hours", 24.0)) * 60.0
-        return self.store.get_series(self._device_id(), ch, minutes=retention)
+        return self.store.get_series(self._dev(), ch, minutes=retention)
 
     def _tool_aggregate(self, arguments: dict[str, Any]) -> dict[str, Any]:
         from analysis.aggregations import AGGS, GROUPS, aggregate
         ch = str(arguments.get("canal") or "Temp Cámara").strip()
-        if ch not in self.store.channels(device_id=self._device_id()):
+        if ch not in self.store.channels(device_id=self._dev()):
             return {"ok": False, "error": f"No existe el canal '{ch}'."}
         agg = str(arguments.get("agg") or "mean").lower()
         grp = str(arguments.get("group_by") or "day").lower()
@@ -2951,7 +3018,7 @@ class CavaAgent:
         import os
         from analysis.aggregations import export_csv
         ch = str(arguments.get("canal") or "Temp Cámara").strip()
-        if ch not in self.store.channels(device_id=self._device_id()):
+        if ch not in self.store.channels(device_id=self._dev()):
             return {"ok": False, "error": f"No existe el canal '{ch}'."}
         d0, d1 = self._range_args(arguments, default_hours=24.0)
         msg = self._history_guard(desde=d0, hasta=d1)
@@ -2972,7 +3039,7 @@ class CavaAgent:
         if self.multipower_present is not None:
             return bool(self.multipower_present)
         try:
-            return any(c.startswith(("M1 ", "M2 ")) for c in self.store.channels(device_id=self._device_id()))
+            return any(c.startswith(("M1 ", "M2 ")) for c in self.store.channels(device_id=self._dev()))
         except Exception:
             return False
 
@@ -2985,7 +3052,7 @@ class CavaAgent:
             asked = float(asked) if asked is not None else None
         except (TypeError, ValueError):
             asked = None
-        dev = self._device_id()
+        dev = self._dev()
         span_min = float(getattr(self.store, "max_hours", 24.0)) * 60.0
         groups: dict[str, dict[str, Any]] = {}
         for ch in self.store.channels(device_id=dev):
@@ -3044,7 +3111,7 @@ class CavaAgent:
         n = max(1, min(int(arguments.get("n", 3) or 3), 10))
         if minutes <= 0:
             return {"ok": False, "error": "'minutos' debe ser mayor que cero."}
-        dev = self._device_id()
+        dev = self._dev()
         rs = [r for r in self.store.get_series(dev, ch, minutes=minutes)
               if r.value is not None and r.quality.value == "VALID"]
         if len(rs) < 5:
@@ -3146,7 +3213,7 @@ class CavaAgent:
         from analysis.diagnosis import diagnose
 
         minutes = float(arguments.get("minutos", 360.0) or 360.0)
-        dev = self._device_id()
+        dev = self._dev()
         all_series = {
             ch: self.store.get_series(dev, ch, minutes=minutes)
             for ch in self.store.channels(device_id=dev)
@@ -3268,7 +3335,7 @@ class CavaAgent:
         from statistics import mean
 
         minutes = float(arguments.get("minutos", 240.0) or 240.0)
-        dev = self._device_id()
+        dev = self._dev()
         known = set(self.store.channels(device_id=dev))
         R, D, T = "Estado Refrigeración", "Estado Deshielo", "Temp Cámara"
         if R not in known:
@@ -3374,7 +3441,7 @@ class CavaAgent:
         return res    
     
     def _freshness(self, channels: list[str]) -> dict[str, Any]:
-        dev = self._device_id()
+        dev = self._dev()
         latest_all = [
             r.event_time
             for ch in self.store.channels(device_id=dev)
@@ -3418,12 +3485,12 @@ class CavaAgent:
 
             if name == "list_channels":
                 from core.channel_catalog import SPEC_BY_NAME
-                all_ch = self.store.channels(device_id=self._device_id())
+                all_ch = self.store.channels(device_id=self._dev())
                 cataloged = [c for c in all_ch if c in SPEC_BY_NAME]
                 passthrough = [c for c in all_ch if c not in SPEC_BY_NAME]
                 return {
                     "ok": True,
-                    "device_id": self._device_id(),
+                    "device_id": self._dev(),
                     "canales_catalogados": cataloged,
                     "total": len(all_ch),
                     "passthrough_resumen": (
@@ -3595,7 +3662,7 @@ class CavaAgent:
             return {"ok": False, "error": msg}
 
         readings = self.store.get_series(
-            device_id=self._device_id(),
+            device_id=self._dev(),
             channel=channel,
             minutes=minutes,
         )
@@ -3605,7 +3672,7 @@ class CavaAgent:
         # --------------------------------------------------------
 
         known = self.store.channels(
-            device_id=self._device_id()
+            device_id=self._dev()
         )
 
         if not readings and channel not in known:
@@ -3684,7 +3751,7 @@ class CavaAgent:
             )
 
         readings = self.store.get_series(
-            device_id=self._device_id(),
+            device_id=self._dev(),
             channel=channel,
             minutes=minutes,
         )
@@ -3694,7 +3761,7 @@ class CavaAgent:
         # --------------------------------------------------------
 
         known = self.store.channels(
-            device_id=self._device_id()
+            device_id=self._dev()
         )
 
         if not readings and channel not in known:
@@ -3830,13 +3897,13 @@ class CavaAgent:
         # --------------------------------------------------------
 
         series_a = self.store.get_series(
-            device_id=self._device_id(),
+            device_id=self._dev(),
             channel=channel_a,
             minutes=minutes,
         )
 
         series_b = self.store.get_series(
-            device_id=self._device_id(),
+            device_id=self._dev(),
             channel=channel_b,
             minutes=minutes,
         )
@@ -3846,7 +3913,7 @@ class CavaAgent:
         # --------------------------------------------------------
 
         known = self.store.channels(
-            device_id=self._device_id()
+            device_id=self._dev()
         )
 
         if not series_a and channel_a not in known:
@@ -3999,7 +4066,7 @@ class CavaAgent:
             )
 
         readings = self.store.get_series(
-            device_id=self._device_id(),
+            device_id=self._dev(),
             channel=channel,
             minutes=minutes,
         )
@@ -4009,7 +4076,7 @@ class CavaAgent:
         # --------------------------------------------------------
 
         known = self.store.channels(
-            device_id=self._device_id()
+            device_id=self._dev()
         )
 
         if not readings and channel not in known:
@@ -4125,7 +4192,7 @@ class CavaAgent:
             # La integración solo suma los intervalos con datos, así que
             # SUBESTIMA aproximadamente (1 - cobertura). Si existe el contador
             # acumulado del mismo equipo, la energía exacta es fin - inicio.
-            dev = self._device_id()
+            dev = self._dev()
             counters = [
                 ch for ch in self.store.channels(device_id=dev)
                 if (r := self.store.latest(dev, ch)) is not None
@@ -4456,10 +4523,9 @@ class CavaAgent:
         return {"ok": True, "arbol": tree, "respuesta_base": self._render_tree(tree, modo)}
 
     def _tool_alarm_history(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Alarmas de SITRAD persistidas en logs/sitrad_alarms.jsonl."""
-        from pathlib import Path
+        """Alarmas de SITRAD persistidas en sitrad_data/sitrad_alarms.jsonl."""
         import json
-        path = Path("sitrad_data") / "sitrad_alarms.jsonl"
+        path = self._resolve_alarms_path()
         if not path.exists():
             return {"ok": True, "alarmas": [], "por_codigo": {},
                     "respuesta_base": ("No hay alarmas de SITRAD guardadas todavía. "
@@ -4467,6 +4533,7 @@ class CavaAgent:
         d0 = self._parse_dt(arguments.get("desde")) or (self._now() - timedelta(days=7))
         d1 = self._parse_dt(arguments.get("hasta")) or self._now()
         inst = (arguments.get("instrumento") or "").lower().strip()
+        inst_id = arguments.get("instrumento_id")
         codigo = (arguments.get("codigo") or "").lower().strip()
         out: list[dict] = []
         try:
@@ -4484,12 +4551,20 @@ class CavaAgent:
                         continue
                     if inst and inst not in (rec.get("instrument") or "").lower():
                         continue
-                    if codigo and codigo not in json.dumps(rec.get("raw", {}), default=str).lower() \
-                            and codigo not in (rec.get("text") or "").lower():
-                        continue
+                    if inst_id is not None:
+                        try:
+                            if rec.get("instrument_id") != int(inst_id):
+                                continue
+                        except (ValueError, TypeError):
+                            continue
+                    if codigo:
+                        raw_blob = json.dumps(rec.get("raw", {}), default=str).lower()
+                        if codigo not in raw_blob and codigo not in (rec.get("text") or "").lower():
+                            continue
                     out.append({
                         "when": t.isoformat(),
                         "instrument": rec.get("instrument"),
+                        "instrument_id": rec.get("instrument_id"),
                         "text": rec.get("text"),
                         "code": (rec.get("raw") or {}).get("code"),
                     })
@@ -4504,17 +4579,16 @@ class CavaAgent:
         for k, n in sorted(por_codigo.items(), key=lambda kv: -kv[1]):
             lines.append(f"  • {k}: {n}")
         for a in out[-10:]:
+            inst_label = a.get("instrument") or f"id={a.get('instrument_id')}" or "?"
             lines.append(f"  · {self._local_fmt(self._parse_dt(a['when']))} "
-                         f"{a['instrument'] or '?'} — {a['text']}")
+                         f"{inst_label} — {a['text']}")
         return {"ok": True, "alarmas": out, "por_codigo": por_codigo,
                 "respuesta_base": "\n".join(lines)}
-
-
 
     def _tool_correlate_with_alarms(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Coincidencia temporal entre variaciones de un canal y alarmas de SITRAD."""
         ch = str(arguments.get("canal") or "Temp Cámara").strip()
-        if ch not in self.store.channels(device_id=self._device_id()):
+        if ch not in self.store.channels(device_id=self._dev()):
             return {"ok": False, "error": f"No existe el canal '{ch}'."}
         d0 = self._parse_dt(arguments.get("desde")) or (self._now() - timedelta(days=7))
         d1 = self._parse_dt(arguments.get("hasta")) or self._now()

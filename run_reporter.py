@@ -366,6 +366,9 @@ def main() -> None:
             save_raw=bool(sitrad_config.get("save_raw", True)),
             data_dir=sitrad_config.get("data_dir", "sitrad_data"),
             announce_existing_alarms=bool(sitrad_config.get("announce_existing_alarms", False)),
+            passthrough=bool(sitrad_config.get("passthrough", True)),
+            instruments_override=sitrad_config.get("instruments_override") or {},
+            channel_maps_by_type=sitrad_config.get("channel_maps_by_type") or {},
             passthrough=bool(sitrad_config.get("passthrough", True)),   # ← NUEVO
         )
         try:
@@ -384,13 +387,14 @@ def main() -> None:
                     )
                     for c in tree.get("converters", []):
                         for ins in c.get("instruments", []):
-                            logger.info("  · convertidor %s → %s (id=%s, %d canales)",
+                            logger.info("  · convertidor %s → %s (id=%s, tipo=%s, device_id=%s, %d canales)",
                                         c.get("name"), ins.get("name"), ins.get("id"),
+                                        ins.get("type"), ins.get("device_id"),
                                         ins.get("n_channels_effective", 0))
                     for ins in tree.get("unassigned_instruments", []):
-                        logger.info("  · (sin convertidor) %s (id=%s, %d canales)",
-                                    ins.get("name"), ins.get("id"),
-                                    ins.get("n_channels_effective", 0))
+                        logger.info("  · (sin convertidor) %s (id=%s, tipo=%s, device_id=%s, %d canales)",
+                                    ins.get("name"), ins.get("id"), ins.get("type"),
+                                    ins.get("device_id"), ins.get("n_channels_effective", 0))
                 except Exception:
                     logger.exception("Descubrimiento SITRAD falló; sigo con el instrumento configurado.")
         except Exception as exc:
@@ -608,9 +612,10 @@ def main() -> None:
         device_id=int(cava_config["device_id"]),
         clock=clock,
         levels_provider=detector.consistency_levels,
-        alarms_path=_base_dir() / (cfg.get("sitrad", {}).get("data_dir", "sitrad_data")+ "/sitrad_alarms.jsonl"),
+        alarms_path=_base_dir() / cfg.get("sitrad", {}).get("data_dir", "sitrad_data")
+                    / "sitrad_alarms.jsonl",
+        registry_provider=lambda: getattr(source, "registry", None),
     )
-
     logger.info(
         "CavaAgent inicializado."
     )
@@ -626,7 +631,8 @@ def main() -> None:
     # La fuente SITRAD solo mapea canales del controlador: nunca hay Multipower. En demo/simulación
     # el store está vacío al arrancar, así que NO se deduce de él (daría False): se deja None.
     if mode == "sitrad":
-        agent.multipower_present = False
+        _reg = getattr(source, "registry", None)
+        agent.multipower_present = bool(_reg and _reg.by_type("multipower"))
         if hasattr(source, "discover_all"):
             agent.discovery_provider = source.discover_all
 
@@ -684,6 +690,13 @@ def main() -> None:
         "polling_seconds": cfg.get(
             "polling_seconds",
             5,
+        ),
+
+        "registry": getattr(source, "registry", None),
+        "monitored_device_ids": (
+            source.registry.device_ids()
+            if getattr(source, "registry", None) is not None
+            else [int(cava_config["device_id"])]
         ),
 
         "channels_que_disparan_eventos": analysis_config.get(

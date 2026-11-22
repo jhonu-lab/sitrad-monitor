@@ -137,3 +137,57 @@ def format_channels(names, max_names: int = 4) -> str:
             label = spec.instrument.capitalize()
         groups[label] = groups.get(label, 0) + 1
     return ", ".join(f"{g}: {n}" for g, n in groups.items())
+
+
+
+def detect_instrument_type(labels: list[str]) -> str:
+    """Clasifica un instrumento a partir de los NOMBRES SITRAD de sus variables.
+
+    - multipower: tiene 'potencia activa' y referencias a M1/M2.
+    - tc900e:     tiene 'ambiente' y alguna de las salidas (refr, defr, fans).
+    - generic:    cualquier otro (sensor suelto, etc.).
+    """
+    text = " ".join(norm_col(lbl).lower() for lbl in labels)
+    if "potencia activa" in text and ("m1" in text or "m2" in text):
+        return "multipower"
+    if "ambiente" in text and ("salida refr" in text or "salida defr" in text or "salida fans" in text):
+        return "tc900e"
+    return "generic"
+
+
+def channels_for_type(instrument_type: str) -> list[dict]:
+    """Canales esperados para cada tipo (lista lista para config)."""
+    if instrument_type == "tc900e":
+        return channels_config(CONTROLLER_SPECS)
+    if instrument_type == "multipower":
+        return channels_config(MULTIPOWER_SPECS)
+    return []  # generic: solo passthrough
+
+
+def channel_map_for_type(instrument_type: str) -> dict:
+    """channel_map por defecto para cada tipo."""
+    if instrument_type == "tc900e":
+        return {
+            "Temp Cámara": "Ambiente",
+            "Temp Cámara (alt)": "Temperatura",
+            "Estado Refrigeración": "Salida REFR",
+            "Estado Deshielo": "Salida DEFR",
+            "Estado Ventilador": "Salida FANS",
+            "Temp Evaporador": "Evaporador",
+            "Puerta Abierta": "Puerta abierta",
+            "Horas Compresor": "Hourmeter",
+            "Alarma Temp Alta": "IsAlrHighTempS1",
+            "Alarma Temp Baja": "IsAlrLowTempS1",
+            "Alarma Puerta": "IsAlrmDoorOpn",
+            "Alarma Deshielo Timeout": "IsDefrTimeOut",
+            "Error Sensor 1": "IsErrorS1",
+            "Error Sensor 2": "IsErrorS2",
+            "Error Sensor 3": "IsErrorS3",
+            "Límite Alarma Temp": "FncSensor1HighAlarmLimit",
+            "Duración Deshielo Config": "FncMaxDefrostDuration",
+            "Datalogger Activo": "DataloggerOn",
+            "Datalogger Lleno": "IsDataloggerFull",
+            "Datalogger Uso": "DataloggerPercentUsage",
+            "Datalogger Ya Sobrescribió": "DataloggerAlreadyOverwrote",
+        }
+    return {}

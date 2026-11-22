@@ -105,7 +105,8 @@ class Reporter:
         self.filelog = filelog
         self.clock = clock
         self.config = config
-
+        self.registry = config.get("registry")  # InstrumentRegistry | None
+        self._monitored_device_ids: list[int] = list(config.get("monitored_device_ids") or [])
         # =========================================================
         # Configuración de eventos
         # =========================================================
@@ -192,7 +193,7 @@ class Reporter:
             )
         )
 
-        self._last_analysis_at: datetime | None = None
+        self._last_analysis_at: dict[int, datetime] = {}
 
         # =========================================================
         # Informes periódicos
@@ -340,7 +341,7 @@ class Reporter:
         self.anomaly_every_seconds = float(
             config.get("anomaly_every_seconds", 30)
         )
-        self._last_anomaly_at: datetime | None = None
+        self._last_anomaly_at: dict[int, datetime] = {}
 
         # Tiempo mínimo para cerrar una anomalía abierta, para
         # no cerrar por un tick bueno aislado.
@@ -513,87 +514,33 @@ class Reporter:
     # =============================================================
     # EVENTOS TRANSITORIOS
     # =============================================================
+    def _process_events(self, now: datetime) -> None:
+        for device_id in self._device_ids():
+            self._process_events_for(device_id, now)
 
-    def _process_events(
-        self,
-        now: datetime,
-    ) -> None:
-        """
-        Procesa los eventos detectados por EventEngine.
+    def _process_events_for(self, device_id: int, now: datetime) -> None:
+        last = self._last_analysis_at.get(device_id)
+        if (self.analysis_every_seconds > 0 and last is not None
+                and (now - last).total_seconds() < self.analysis_every_seconds):
+            return
 
-        El análisis se ejecuta como máximo una vez cada
-        analysis_every_seconds. Los ticks intermedios no
-        recalculan nada: los eventos son fenómenos que
-        persisten varios ciclos.
-        """
-
-        # ---------------------------------------------------------
-        # Throttle de análisis
-        # ---------------------------------------------------------
-
-        if self.analysis_every_seconds > 0:
-
-            if (
-                self._last_analysis_at is not None
-                and (
-                    now - self._last_analysis_at
-                ).total_seconds()
-                < self.analysis_every_seconds
-            ):
-                return
-
-        # ---------------------------------------------------------
-        # Obtener series
-        # ---------------------------------------------------------
-
-        series = self._get_analysis_series()
-
+        series = self._get_analysis_series(device_id)
         if not series:
             return
 
         try:
-
-            events = self.event_engine.step(
-                series
-            )
-
+            events = self.event_engine.step(series)
         except Exception:
-
-            logger.exception(
-                "Error ejecutando EventEngine."
-            )
-
+            logger.exception("Error ejecutando EventEngine para device %d.", device_id)
             return
 
-        # ---------------------------------------------------------
-        # Marcar la marca temporal del análisis
-        # ---------------------------------------------------------
-        #
-        # Se hace después de step() para no penalizar un fallo
-        # transitorio: si step() explota, el siguiente tick lo
-        # reintenta.
-        # ---------------------------------------------------------
-
-        self._last_analysis_at = now
+        self._last_analysis_at[device_id] = now
 
         if not events and self.policy is None:
             return
 
-        # ---------------------------------------------------------
-        # Orden cronológico
-        # ---------------------------------------------------------
-        #
-        # El evento más antiguo se procesa primero.
-        # Esto permite que _last_processed_fin avance
-        # cronológicamente.
-        # ---------------------------------------------------------
+        events = sorted(events, key=lambda event: event.inicio)
 
-        events = sorted(
-            events,
-            key=lambda event: event.inicio,
-        )
-
-        # ── FASE 4 ─────────────────────────────────────────────
         if self.policy is not None:
             accepted, messages = self.policy.decide_events(events, now)
             for event in accepted:
@@ -601,112 +548,55 @@ class Reporter:
             for msg in messages:
                 self._send_policy_message(msg)
             return
-        # ────────────────────────────────────────────────────────
-
 
     # =============================================================
     # ── FASE 2 ──────────────────────────────────────────────────
     # ANOMALÍAS PERSISTENTES
     # =============================================================
-
     def _process_anomalies(self, now: datetime) -> None:
-        """
-        Rama paralela a _process_events.
+        for device_id in self._device_ids():
+            self._process_anomalies_for(device_id, now)
 
-        _process_events detecta TRANSITORIOS (subidas, escalones).
-        _process_anomalies detecta ESTADOS (deriva persistente,
-        sensor congelado, caída de comunicación, fuera de perfil).
-
-        Los estados se acumulan hasta que la condición desaparece.
-        Se emite un mensaje al abrir la anomalía y otro al cerrarla.
-
-        Si profile o detector son None, la rama queda desactivada.
-        """
-
+    def _process_anomalies_for(self, device_id: int, now: datetime) -> None:
         if self.detector is None or self.profile is None:
             return
 
-        # ---------------------------------------------------------
-        # Throttle
-        # ---------------------------------------------------------
-
-        if self.anomaly_every_seconds > 0:
-            if (
-                self._last_anomaly_at is not None
-                and (now - self._last_anomaly_at).total_seconds()
-                < self.anomaly_every_seconds
-            ):
-                return
-
-        series = self._get_analysis_series()
-        if not series:
+        last = self._last_anomaly_at.get(device_id)
+        if (self.anomaly_every_seconds > 0 and last is not None
+                and (now - last).total_seconds() < self.anomaly_every_seconds):
             return
 
-        # ---------------------------------------------------------
-        # Alimentar el perfil con las series recientes.
-        # ---------------------------------------------------------
+        series = self._get_analysis_series(device_id)
+        if not series:
+            return
 
         try:
             for readings in series.values():
                 self.profile.ingest_many(readings)
         except Exception:
-            logger.exception(
-                "Error alimentando BehaviorProfile."
-            )
+            logger.exception("Error alimentando BehaviorProfile.")
 
-        # El perfil debe recalcularse periódicamente.
         try:
             self.profile.fit()
         except Exception:
-            logger.exception(
-                "Error ajustando BehaviorProfile."
-            )
-        # ---------------------------------------------------------
-        # Detección principal.
-        # ---------------------------------------------------------
+            logger.exception("Error ajustando BehaviorProfile.")
 
         try:
-            states: list[AnomalyState] = self.detector.detect(
-                series, self.profile,
-            )
+            states = self.detector.detect(series, self.profile)
         except Exception:
-            logger.exception(
-                "Error ejecutando AnomalyDetector."
-            )
+            logger.exception("Error ejecutando AnomalyDetector.")
             return
-
-        # ---------------------------------------------------------
-        # Anomalías de calidad (QualityGuard).
-        # ---------------------------------------------------------
 
         if self.quality_guard is not None:
             try:
-                all_readings = [
-                    r for readings in series.values() for r in readings
-                ]
+                all_readings = [r for readings in series.values() for r in readings]
                 for issue in self.quality_guard.issues(all_readings):
-                    # Preservar el kind real del issue. NO forzar 'missing':
-                    # QualityGuard también reporta señales planas ('frozen'),
-                    # que no son fallos de comunicación y no deben ir a SALUD.
                     raw_kind = getattr(issue, "kind", None)
-
                     if raw_kind is None:
-                        # Fallback: inferir desde las calidades observadas.
                         quals = {getattr(q, "value", q) for q in issue.qualities}
-                        if quals & {"missing", "offline", "err"}:
-                            raw_kind = "missing"
-                        else:
-                            raw_kind = "flat_signal"
-
-                    # AnomalyKind sólo admite
-                    # 'out_of_profile' | 'flat_signal' | 'missing' | 'persistent_drift'.
-                    # 'frozen' u otros se mapean a flat_signal.
-                    if raw_kind not in {
-                        "out_of_profile", "flat_signal",
-                        "missing", "persistent_drift",
-                    }:
+                        raw_kind = "missing" if quals & {"missing", "offline", "err"} else "flat_signal"
+                    if raw_kind not in {"out_of_profile", "flat_signal", "missing", "persistent_drift"}:
                         raw_kind = "flat_signal"
-
                     states.append(AnomalyState(
                         channel=issue.channel,
                         kind=raw_kind,
@@ -720,37 +610,18 @@ class Reporter:
             except Exception:
                 logger.exception("Error consultando QualityGuard.")
 
-        self._last_anomaly_at = now
+        self._last_anomaly_at[device_id] = now
 
-        # ── FASE 4 ─────────────────────────────────────────────
         if self.policy is not None:
-            # Elegir el estado más severo por canal. El operador
-            # decide por el peor estado, no por el último que llegó.
             active_by_channel: dict[str, AnomalyState] = {}
             for state in states:
                 prev = active_by_channel.get(state.channel)
                 if prev is None or state.severity > prev.severity:
                     active_by_channel[state.channel] = state
-
-            for msg in self.policy.decide_anomalies(
-                active_by_channel, now,
-            ):
+            for msg in self.policy.decide_anomalies(active_by_channel, now):
                 self._send_policy_message(msg)
             self._check_diagnosis_updates(now)
             return
-
-
-    # ────────────────────────────────────────────────────────────
-
-    # =============================================================
-    # MANEJO DE EVENTO
-    # =============================================================
-
-
-    # =============================================================
-    # RELEVANCIA
-    # =============================================================
-
 
     # =============================================================
     # INFORME PERIÓDICO
@@ -1007,53 +878,16 @@ class Reporter:
     # =============================================================
     # DATOS DEL STORE
     # =============================================================
-
-    def _get_analysis_series(
-        self,
-    ) -> dict[str, list[ChannelReading]]:
-        """
-        Obtiene las series del dispositivo que está siendo monitoreado.
-
-        SeriesStore conserva las claves como:
-
-            "{device_id}:{channel}"
-
-        pero EventEngine trabaja únicamente con:
-
-            "{channel}"
-        """
-
-        minutes = float(
-            self.config.get(
-                "report_window_minutes",
-                30,
-            )
-        )
-
-        device_id = int(
-            self.config["device_id"]
-        )
-
-        all_series = self.store.all_series(
-            minutes=minutes
-        )
-
-        prefix = f"{device_id}:"
-
-        result: dict[
-            str,
-            list[ChannelReading],
-        ] = {}
-
+    def _get_analysis_series(self, device_id: int | None = None) -> dict[str, list[ChannelReading]]:
+        minutes = float(self.config.get("report_window_minutes", 30))
+        dev = int(device_id if device_id is not None else self.config["device_id"])
+        all_series = self.store.all_series(minutes=minutes)
+        prefix = f"{dev}:"
+        result: dict[str, list[ChannelReading]] = {}
         for key, readings in all_series.items():
-
             if not key.startswith(prefix):
                 continue
-
-            channel = key[len(prefix):]
-
-            result[channel] = readings
-
+            result[key[len(prefix):]] = readings
         return result
 
     # =============================================================
@@ -1216,10 +1050,6 @@ class Reporter:
             (e for e in events if self._is_significant(e)),
             key=lambda e: e.inicio,
         )
-
-    # =============================================================
-    # ENVÍO
-        # =============================================================
     def _process_sitrad_alarms(self, now: datetime) -> None:
         fn = getattr(self.source, "new_alarms", None)
         if fn is None:
@@ -1232,42 +1062,52 @@ class Reporter:
             if not fresh:
                 return
             tz = local_tz(self.cooling_cfg.tz_name)
-            temp = self.store.get_series(int(self.config["device_id"]),
-                                        DEFAULT_CFG["ch_temp"], minutes=30)
-            tlast = next((float(x.value) for x in reversed(temp) if x.value is not None), None)
+            multi = self._device_ids_len() > 1
 
             for al in fresh:
                 self.sitrad_alarms.append(al)
                 when = al["when"].astimezone(tz).strftime("%H:%M") if al.get("when") else None
                 inst = al.get("instrument", "")
+                prefix = f"[{inst}] " if (multi and inst) else (f" — {inst}" if inst else "")
+                header = f"🔔 Alarma de SITRAD{prefix}" + (f" ({when})" if when else "")
 
-                # ¿Es una alarma de temperatura?
+                # Buscar la temperatura del dispositivo correcto
+                temp = None
+                inst_id = al.get("instrument_id")
+                target_device = None
+                if inst_id is not None and self.registry is not None:
+                    info = next(
+                        (i for i in self.registry.instruments.values()
+                         if i.instrument_id == inst_id), None,
+                    )
+                    if info is not None:
+                        target_device = info.device_id
+                if target_device is None and self.registry is not None:
+                    thermal = self.registry.by_type("tc900e")
+                    if thermal:
+                        target_device = thermal[0].device_id
+                if target_device is not None:
+                    series = self.store.get_series(target_device, DEFAULT_CFG["ch_temp"], minutes=30)
+                    temp = next((float(x.value) for x in reversed(series) if x.value is not None), None)
+
                 text_lower = (al.get("text") or "").lower()
                 is_temp_alarm = any(k in text_lower for k in
                                     ("temperatura", "temp", "alta temp", "high temp", "calor"))
 
-                if is_temp_alarm and self._cooling_enabled:
-                    # Consolidar: alarma + diagnóstico en un solo mensaje
-                    r = self.agent._tool_diagnose_now({"minutos": 60})
+                if is_temp_alarm and self._cooling_enabled and target_device is not None:
+                    r = self.agent._tool_diagnose_now({"minutos": 60, "device_id": target_device}) \
+                        if hasattr(self.agent, "_tool_diagnose_now") else {}
                     diag = r.get("respuesta_base") if r.get("ok") else ""
-                    lines = [f"🔔 Alarma de SITRAD" + (f" — {inst}" if inst else "")
-                            + (f" ({when})" if when else "")]
-                    lines.append(al["text"])
-                    if tlast is not None:
-                        lines.append(f"Temperatura de la cámara ahora: "
-                                    f"{str(round(tlast, 1)).replace('.', ',')} °C.")
+                    lines = [header, al["text"]]
+                    if temp is not None:
+                        lines.append(f"Temperatura actual: {str(round(temp, 1)).replace('.', ',')} °C.")
                     if diag:
-                        lines.append("")
-                        lines.append("Diagnóstico: " + diag)
+                        lines.extend(["", "Diagnóstico: " + diag])
                     self._send("\n".join(lines), reason="alarma_sitrad_temp")
                 else:
-                    # Alarma no térmica: mensaje corto como antes
-                    lines = [f"🔔 Alarma de SITRAD" + (f" — {inst}" if inst else "")
-                            + (f" ({when})" if when else "")]
-                    lines.append(al["text"])
-                    if tlast is not None:
-                        lines.append(f"Temperatura de la cámara ahora: "
-                                    f"{str(round(tlast, 1)).replace('.', ',')} °C.")
+                    lines = [header, al["text"]]
+                    if temp is not None:
+                        lines.append(f"Temperatura actual: {str(round(temp, 1)).replace('.', ',')} °C.")
                     self._send("\n".join(lines), reason="alarma_sitrad")
         except Exception:
             logger.exception("Fallo procesando las alarmas de SITRAD.")
@@ -1278,15 +1118,33 @@ class Reporter:
         base = self.cooling_cfg
         lim, _ = self.product_log.effective_limit(self.clock.now(), base.limit_c)
         return replace(base, limit_c=lim, product_rules={**base.product_rules, **self.product_log.rules_map()})
+    
+    def _device_ids(self) -> list[int]:
+        if self._monitored_device_ids:
+            return list(self._monitored_device_ids)
+        return [int(self.config["device_id"])]
 
+    def _device_ids_len(self) -> int:
+        return len(self._device_ids())
+    
     def _process_cooling(self, now: datetime) -> None:
-        """Alertas e informes de temperatura de la cámara (termocupla)."""
         if not self._cooling_enabled:
             return
+        for device_id in self._device_ids():
+            if self.registry is not None:
+                info = self.registry.by_device_id(device_id)
+                if info is not None and info.type not in ("tc900e", "generic"):
+                    continue
+            try:
+                self._process_cooling_for(device_id, now)
+            except Exception:
+                logger.exception("Fallo cooling device %d.", device_id)
+
+    def _process_cooling_for(self, device_id: int, now: datetime) -> None:
         try:
             from analysis.diagnosis import DEFAULT_CFG
 
-            dev = int(self.config["device_id"])
+            dev = int(device_id)
             span = float(getattr(self.store, "max_hours", 24.0)) * 60.0
             g = lambda ch: self.store.get_series(dev, ch, minutes=span)
             temp = g(DEFAULT_CFG["ch_temp"])
@@ -1308,6 +1166,10 @@ class Reporter:
                 if kind == "informe" and self._llm_analysis:
                     from agent.narrative import add_analysis
                     text = add_analysis(text, getattr(self.agent, "llm", None))
+                if self._device_ids_len() > 1 and self.registry is not None:
+                    info = self.registry.by_device_id(device_id)
+                    prefix = f"[{info.name}] " if info else ""
+                    text = prefix + text
                 self._send(text, reason=f"temperatura_{kind}")
         except Exception:
             logger.exception("Fallo generando el informe de temperatura.")
@@ -1650,51 +1512,35 @@ class Reporter:
                 "Error drenando cola de reintentos de Telegram."
             )
 
-
     def _process_health(self, now: datetime) -> None:
-        """
-        Detecta canales sin lecturas recientes y, si la política
-        lo soporta, emite SALUD.
-
-        El umbral se controla con 'stale_channel_minutes' (default 5).
-        """
         if self.policy is None or not self._tech_messages:
-            return          # el aviso de "sin lecturas" lo da el informe de temperatura
+            return
         decide = getattr(self.policy, "decide_health", None)
         if decide is None:
             return
 
-        series = self._get_analysis_series()
-        if not series:
-            return
+        threshold = timedelta(minutes=float(self.config.get("stale_channel_minutes", 5)))
 
-        threshold = timedelta(
-            minutes=float(self.config.get("stale_channel_minutes", 5))
-        )
-
-        stale = []
-        for channel, readings in series.items():
-            if not readings:
-                stale.append(channel)
+        for device_id in self._device_ids():
+            series = self._get_analysis_series(device_id)
+            if not series:
                 continue
-            last = readings[-1].event_time
-            if now - last > threshold:
-                stale.append(channel)
-
-        if not stale:
-            return
-        logger.warning(
-            "HEALTH_CHECK stale=%s threshold=%s",
-            stale, threshold,
-        )
-        try:
-            messages = decide(now, stale)
-        except Exception:
-            logger.exception("Error ejecutando policy.decide_health.")
-            return
-
-        for msg in messages:
-            self._send_policy_message(msg)
+            stale = []
+            for channel, readings in series.items():
+                if not readings:
+                    stale.append(channel)
+                    continue
+                if now - readings[-1].event_time > threshold:
+                    stale.append(channel)
+            if not stale:
+                continue
+            logger.warning("HEALTH_CHECK device=%d stale=%s threshold=%s",
+                           device_id, stale, threshold)
+            try:
+                for msg in decide(now, stale):
+                    self._send_policy_message(msg)
+            except Exception:
+                logger.exception("Error ejecutando policy.decide_health.")
 
 
     def _warmup_history(self) -> None:
