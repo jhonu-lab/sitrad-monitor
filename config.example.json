@@ -1,0 +1,221 @@
+{
+  "mode": "sitrad",
+  "passthrough": true,
+  "polling_seconds": 5,
+  "analysis_every_seconds": 120,
+  "anomaly_every_seconds": 120,
+  "anomaly_clear_seconds": 600,
+  "report_window_minutes": 120,
+  "simulation": {
+    "seed": 42,
+    "scenario": "random",
+    "speed": 12.0
+  },
+  "cava_colanta": {
+    "device_id": 201,
+    "device_name": "Cava Colanta",
+    "setpoint": -2.0,
+    "truth_log": "logs/sim_truth.jsonl",
+    "compressor_channel": "Estado Refrigeración",
+    "normal_warmup_hours": 0.5
+  },
+  "locations": [
+    {
+      "name": "Cava Colanta",
+      "kind": "cava",
+      "instruments": [
+        1
+      ]
+    }
+  ],
+  "cooling": {
+    "temp_limit_c": 4.0,
+    "max_recovery_min": null,
+    "product_rules": {
+      "ternera": {
+        "max_minutes_above": 120
+      }
+    },
+    "warn_slope_c_h": 3.0,
+    "warn_horizon_min": 30,
+    "door_warn_min": 5,
+    "critical_c": 8.0,
+    "agent_scope": "controlador",
+    "history_hours": 24
+  },
+  "sitrad": {
+    "base_url": "https://localhost:8004/api/v1",
+    "verify_ssl": false,
+    "instrument_id": 1,
+    "poll_seconds": 30,
+    "alarms_every_seconds": 60,
+    "save_raw": true,
+    "passthrough": true,
+    "instruments_override": {},
+    "channel_maps_by_type": {},
+    "channel_map": {
+      "Temp Cámara": "Ambiente",
+      "Temp Cámara (alt)": "Temperatura",
+      "Presión Caldera": "Presión",
+      "Estado Refrigeración": "Salida REFR",
+      "Estado Deshielo": "Salida DEFR",
+      "Estado Ventilador": "Salida FANS",
+      "Temp Evaporador": "Evaporador",
+      "Puerta Abierta": "Puerta abierta",
+      "Horas Compresor": "Hourmeter",
+      "Alarma Temp Alta": "IsAlrHighTempS1",
+      "Alarma Temp Baja": "IsAlrLowTempS1",
+      "Alarma Puerta": "IsAlrmDoorOpn",
+      "Alarma Deshielo Timeout": "IsDefrTimeOut",
+      "Error Sensor 1": "IsErrorS1",
+      "Error Sensor 2": "IsErrorS2",
+      "Error Sensor 3": "IsErrorS3",
+      "Límite Alarma Temp": "FncSensor1HighAlarmLimit",
+      "Duración Deshielo Config": "FncMaxDefrostDuration",
+      "Datalogger Activo": "DataloggerOn",
+      "Datalogger Lleno": "IsDataloggerFull",
+      "Datalogger Uso": "DataloggerPercentUsage",
+      "Datalogger Ya Sobrescribió": "DataloggerAlreadyOverwrote"
+    },
+    "user": "",
+    "password": "",
+    "multi_instrument": true,
+    "auto_locations": true
+  },
+  "channel_aliases": {
+    "temperatura, cámara, cava": "Temp Cámara",
+    "compresor, refrigeración, refr": "Estado Refrigeración",
+    "deshielo, descongelamiento": "Estado Deshielo",
+    "puerta": "Puerta Abierta",
+    "setpoint, consigna": "Setpoint",
+    "desvío": "Desvío vs Setpoint",
+    "evaporador": "Temp Evaporador",
+    "ventilador, fans": "Estado Ventilador",
+    "datalogger": "Datalogger Uso"
+  },
+  "analysis": {
+    "channels_que_disparan_eventos": [
+      "Temp Cámara"
+    ],
+    "min_delta_canal_primario": 3.0,
+    "min_change_delta": 0.5,
+    "min_window_delta": 0.5,
+    "change_window_points": 4,
+    "max_change_gap_seconds": 600,
+    "min_event_duration_min": 2.0,
+    "max_event_duration_min": 90.0,
+    "suppress_benign_incidents": true,
+    "state_run_limits_min": {
+      "Estado Deshielo": 40.0,
+      "Puerta Abierta": 10.0
+    },
+    "min_event_magnitude": 0.3,
+    "learning_hours": 2.0,
+    "event_settle_seconds": 300,
+    "event_dedup_margin_seconds": 300,
+    "incident_clear_seconds": 600,
+    "incident_grouping_seconds": 600,
+    "quality_guard_frozen_min_samples": 30,
+    "flat_signal_min_samples": 12,
+    "persistent_drift_min_minutes": 20.0,
+    "out_of_profile_k_sigma": 4.0,
+    "flat_signal_exempt_channels": [
+      "Setpoint",
+      "Desvío vs Setpoint",
+      "Estado Ventilador",
+      "Datalogger Uso",
+      "Límite Alarma Temp",
+      "Duración Deshielo Config",
+      "Diferencial",
+      "Horas Compresor"
+    ],
+    "consistency_rules": [],
+    "profiled_channels": [
+      "Temp Cámara",
+      "Temp Evaporador"
+    ],
+    "contextual_masks": [
+      {
+        "when_channel": "Estado Deshielo",
+        "grace_minutes": 45,
+        "suppress": [
+          "Temp Cámara",
+          "Desvío vs Setpoint",
+          "Temp Evaporador"
+        ]
+      }
+    ],
+    "analysis_channels": "catalog",
+    "profile_refit_minutes": 30,
+    "profile_learning_refit_minutes": 5
+  },
+  "llm": {
+    "provider": "ollama",
+    "model": "cava-qwen:latest",
+    "num_ctx": 6144,
+    "keep_alive": -1,
+    "ollama_host": "http://localhost:11434",
+    "timeout_seconds": 120,
+    "num_predict": 1024,
+    "num_thread": 4,
+    "think": false
+  },
+  "telegram": {
+    "enabled": true,
+    "token": "",
+    "chat_id": "",
+    "chat_ids": [],
+    "allowed_user_ids": null,
+    "group_requires_mention": true
+  },
+  "storage": {
+    "max_hours": 168,
+    "replay_on_start": true,
+    "cases_log": "logs/cases.jsonl",
+    "report_log": "logs/reports.jsonl",
+    "events_log": "logs/events.jsonl",
+    "observations_log": "logs/observations.jsonl",
+    "episodes_log": "logs/episodes.jsonl",
+    "passthrough_max_hours": 24,
+    "retention": {
+      "enabled": true,
+      "run_at_hour_local": 3,
+      "max_total_mb": 0,
+      "days": {
+        "raw_readings": 3,
+        "events": 90,
+        "reports": 30,
+        "cases": 180,
+        "cooling_cases": 180,
+        "feedback": 365,
+        "episodes": 365,
+        "conversations": 30,
+        "alarms": 180,
+        "sim_truth": 7,
+        "charts": 7,
+        "exports": 30
+      }
+    }
+  },
+  "operations": {
+    "timezone": "America/Bogota",
+    "heartbeat_every_minutes": 0,
+    "summary_hours_local": [
+      6,
+      14,
+      22
+    ],
+    "max_messages_per_hour": 12,
+    "stale_channel_minutes": 10,
+    "warmup_on_start": false,
+    "conversations_log": "logs/conversations.jsonl",
+    "telegram_retry_max": 100,
+    "telegram_retry_interval_seconds": 30,
+    "rotation": {
+      "mode": "daily",
+      "keep_days": 7,
+      "max_file_mb": 50
+    },
+    "agent_worker": true
+  }
+}

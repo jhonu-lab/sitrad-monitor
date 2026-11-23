@@ -74,21 +74,8 @@ class ReportPolicy:
             config.get("require_return_to_base", True)
         )
 
-        # --- Settle / dedup de eventos ---
-        self._last_event_fin: datetime | None = None
-        self._settle = timedelta(
-            seconds=float(config.get("event_settle_seconds", 60))
-        )
-        self._dedup_margin = timedelta(
-            seconds=float(
-                config.get("event_dedup_margin_seconds", 60)
-            )
-        )
-
-        # --- Incidentes (agrupación de anomalías) ---
-        self.incident_grouping_seconds = float(
-            config.get("incident_grouping_seconds", 60)
-        )
+        # --- Dedup de eventos (por dispositivo/lugar) ---
+        self._last_event_fin: dict[Any, datetime] = {}
 
         # Tiempo mínimo desde el último avistamiento antes de cerrar
         # un incidente. Sin histéresis, cualquier tick sin anomalía
@@ -105,6 +92,7 @@ class ReportPolicy:
 
         # --- Cola de resumen ---
         self._pending_events: list[EventCandidate] = []
+        self._pending_labels: list[str] = []          # lugar de cada evento pendiente
         self._last_summary_at: datetime | None = None
         self.summary_hours_local = tuple(
             config.get("summary_hours_local", (6, 14, 22))
@@ -132,6 +120,8 @@ class ReportPolicy:
         self,
         events: list[EventCandidate],
         now: datetime,
+        device_id: Any = None,
+        label: str = "",
     ) -> tuple[list[EventCandidate], list[PolicyMessage]]:
         """
         Los eventos transitorios NO generan ALERTA inmediata.
@@ -151,15 +141,16 @@ class ReportPolicy:
             # Dedup primero. El EventEngine re-emite el mismo evento
             # en cada tick mientras la ventana lo contenga. Saltar
             # sin loguear.
-            if self._last_event_fin is not None:
-                if event.inicio <= self._last_event_fin:
-                    continue
+            last_fin = self._last_event_fin.get(device_id)
+            if last_fin is not None and event.inicio <= last_fin:
+                continue
 
             accepted.append(event)
-            self._last_event_fin = event.fin
+            self._last_event_fin[device_id] = event.fin
 
             # Todo evento aceptado va al resumen.
             self._pending_events.append(event)
+            self._pending_labels.append(label)
 
         return accepted, []
 
@@ -171,6 +162,8 @@ class ReportPolicy:
         self,
         active_states: dict[str, Any],
         now: datetime,
+        device_id: Any = None,
+        label: str = "",
     ) -> list[PolicyMessage]:
         """
         Agrupa los estados activos por incidente.
@@ -183,24 +176,26 @@ class ReportPolicy:
         - Histéresis de cierre. Un incidente solo se cierra cuando
           pasan `incident_clear_seconds` desde el último avistamiento.
         - Agrupación por actividad reciente, no por `opened_at`.
+        - Multi-lugar: cada incidente pertenece a un `device_id`; los
+          canales de lugares distintos nunca se mezclan.
         """
         messages: list[PolicyMessage] = []
-        set(active_states.keys())
 
         for channel, state in active_states.items():
+            ckey = self._ckey(device_id, channel)
 
             # Buscar un incidente abierto que cubra este canal o
             # haya tenido actividad en la ventana reciente.
-            key = self._channel_to_incident.get(channel)
+            key = self._channel_to_incident.get(ckey)
 
             if key is None or key not in self._open_incidents:
-                key = self._recent_open_incident(now, state.kind)
+                key = self._recent_open_incident(now, state.kind, device_id)
 
             is_new = key is None
             if is_new:
-                key = self._new_incident(state, now)
+                key = self._new_incident(state, now, device_id, label)
 
-            self._channel_to_incident[channel] = key
+            self._channel_to_incident[ckey] = key
             incident = self._open_incidents[key]
             incident["channels"].add(channel)
             incident["states"][channel] = state
@@ -246,17 +241,22 @@ class ReportPolicy:
     def _family(cls, kind: str) -> str:
         return cls._FAMILIES.get(kind, kind)
 
+    @staticmethod
+    def _ckey(device_id: Any, channel: str) -> str:
+        return channel if device_id is None else f"{device_id}:{channel}"
+
     def _recent_open_incident(
         self,
         now: datetime,
         kind: str | None = None,
+        device_id: Any = None,
     ) -> str | None:
         cutoff = now - timedelta(seconds=self.incident_clear_seconds)
         fam = self._family(kind) if kind is not None else None
         best_key: str | None = None
         best_seen: datetime | None = None
         for key, inc in self._open_incidents.items():
-            if inc["last_seen_at"] < cutoff:
+            if inc["last_seen_at"] < cutoff or inc.get("device_id") != device_id:
                 continue
             if fam is not None and fam not in {
                 self._family(k) for k in inc["kinds"]
@@ -268,10 +268,12 @@ class ReportPolicy:
         return best_key
 
 
-    def _new_incident(self, state: Any, now: datetime) -> str:
+    def _new_incident(self, state: Any, now: datetime, device_id: Any = None, label: str = "") -> str:
         self._incident_counter += 1
         key = f"inc{self._incident_counter}"
         self._open_incidents[key] = {
+            "device_id": device_id,
+            "label": label,
             "kind": state.kind,
             "kinds": {state.kind},   # todos los tipos vistos
             "channels": set(),
@@ -285,6 +287,19 @@ class ReportPolicy:
             "opened_sent": False,    # ¿el OPEN pasó el rate limit?
         }
         return key
+    @staticmethod
+    def _tag(incident: dict[str, Any]) -> str:
+        return f"[{incident['label']}] " if incident.get("label") else ""
+
+    @staticmethod
+    def _where(incident: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if incident.get("device_id") is not None:
+            out["device_id"] = incident["device_id"]
+        if incident.get("label"):
+            out["location"] = incident["label"]
+        return out
+
     def _emit_incident_open(
         self,
         key: str,
@@ -304,12 +319,13 @@ class ReportPolicy:
         channels_sorted = sorted(incident["channels"])
         n = len(channels_sorted)
         text = (
-            f"[INCIDENTE] {incident['kind']}\n"
+            f"{self._tag(incident)}[INCIDENTE] {incident['kind']}\n"
             f"Canales: {n} ({format_channels(channels_sorted)})\n"
             f"Severidad máxima: {incident['severity_max']:.2f}\n"
             f"Desde: {incident['opened_at'].isoformat()}"
         )
         payload = {
+            **self._where(incident),
             "incident_kind": incident["kind"],
             "channels": channels_sorted,
             "opened_at": incident["opened_at"].isoformat(),
@@ -351,12 +367,13 @@ class ReportPolicy:
 
         channels_sorted = sorted(incident["channels"])
         text = (
-            f"[INCIDENTE] {incident['kind']} escala\n"
+            f"{self._tag(incident)}[INCIDENTE] {incident['kind']} escala\n"
             f"Canales: {len(channels_sorted)} "
             f"({format_channels(channels_sorted)})\n"
             f"Severidad máxima: {incident['severity_max']:.2f}"
         )
         payload = {
+            **self._where(incident),
             "incident_kind": incident["kind"],
             "channels": channels_sorted,
             "severity_max": incident["severity_max"],
@@ -384,8 +401,9 @@ class ReportPolicy:
     ) -> list[PolicyMessage]:
         self._open_incidents.pop(key, None)
         for ch in incident["channels"]:
-            if self._channel_to_incident.get(ch) == key:
-                self._channel_to_incident.pop(ch, None)
+            ckey = self._ckey(incident.get("device_id"), ch)
+            if self._channel_to_incident.get(ckey) == key:
+                self._channel_to_incident.pop(ckey, None)
 
         duration_min = max(
             0.0,
@@ -401,12 +419,13 @@ class ReportPolicy:
 
         channels_sorted = sorted(incident["channels"])
         text = (
-            f"[INCIDENTE RESUELTO] {incident['kind']}\n"
+            f"{self._tag(incident)}[INCIDENTE RESUELTO] {incident['kind']}\n"
             f"Canales: {len(channels_sorted)} "
             f"({format_channels(channels_sorted)})\n"
             f"Duración: {duration_min:.1f} min"
         )
         payload = {
+            **self._where(incident),
             "incident_kind": incident["kind"],
             "channels": channels_sorted,
             "duration_min": duration_min,
@@ -461,6 +480,7 @@ class ReportPolicy:
             return []
 
         self._pending_events.clear()
+        self._pending_labels.clear()
         self._last_summary_at = now
         return [msg]
 
@@ -476,13 +496,15 @@ class ReportPolicy:
             f"[RESUMEN] {local.strftime('%Y-%m-%d %H:%M')}",
             f"Eventos: {len(self._pending_events)}",
         ]
+        labels = self._pending_labels + [""] * (len(self._pending_events) - len(self._pending_labels))
         top = sorted(
-            self._pending_events,
-            key=lambda e: -e.duracion_min,
+            zip(self._pending_events, labels),
+            key=lambda el: -el[0].duracion_min,
         )[:5]
-        for e in top:
+        for e, label in top:
+            where = f"[{label}] " if label else ""
             lines.append(
-                f"  · {e.patron} {e.duracion_min:.1f} min "
+                f"  · {where}{e.patron} {e.duracion_min:.1f} min "
                 f"({', '.join(e.variables_afectadas)})"
             )
         if len(self._pending_events) > 5:
@@ -498,6 +520,8 @@ class ReportPolicy:
         self,
         now: datetime,
         inactive_channels: list[str],
+        device_id: Any = None,
+        label: str = "",
     ) -> list[PolicyMessage]:
         if not inactive_channels:
             return []
@@ -508,12 +532,13 @@ class ReportPolicy:
         #    decide_anomalies y ese incidente ya manda SALUD al abrir.
         # ----------------------------------------------------------
         channels_open = {
-            ch
-            for ch, key in self._channel_to_incident.items()
+            ckey
+            for ckey, key in self._channel_to_incident.items()
             if key in self._open_incidents
         }
         remaining = sorted(
-            ch for ch in inactive_channels if ch not in channels_open
+            ch for ch in inactive_channels
+            if self._ckey(device_id, ch) not in channels_open
         )
         if not remaining:
             return []
@@ -523,13 +548,14 @@ class ReportPolicy:
         #    de la clave. Así {A} → {A,B} → {A,B,C} no burla el
         #    cooldown. El texto sí refleja el conjunto actual.
         # ----------------------------------------------------------
-        key = "health:stale"
+        key = "health:stale" if device_id is None else f"health:stale:{device_id}"
+        where = f"[{label}] " if label else ""
         msg = self._make(
             kind=MessageKind.SALUD,
             key=key,
             text=(
-                "[SALUD] Sin datos de: "
-                + ", ".join(remaining)
+                f"{where}[SALUD] Sin datos de: "
+                + format_channels(remaining, max_names=8)
             ),
             priority=1,
             now=now,
@@ -580,15 +606,6 @@ class ReportPolicy:
     # INTROSPECCIÓN
     # ========================================================
 
-    def reset(self) -> None:
-        self._open_incidents.clear()
-        self._channel_to_incident.clear()
-        self._incident_counter = 0
-        self._pending_events.clear()
-        self._sent_at.clear()
-        self._last_key_at.clear()
-        self._last_event_fin = None
-        self._last_summary_at = None
 
     @property
     def open_incidents(self) -> dict[str, dict[str, Any]]:

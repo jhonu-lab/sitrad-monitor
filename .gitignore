@@ -69,3 +69,11 @@ desktop.ini
 *.old
 monitor_sitrad/
 clase/
+
+# ============================================================
+# Datos del bot en ejecución y respaldos locales
+# ============================================================
+/sitrad_data/
+_respaldo_*/
+*.retention.tmp
+*.tmp

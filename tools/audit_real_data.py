@@ -226,7 +226,7 @@ def main(ctrl: str, mp: str, recommended: bool = False, tail: bool = False) -> N
         agent = CavaAgent(llm=object(), engine=engine, store=store, device_id=DEV)
         tool = agent._execute_tool
 
-    print(f"\n== COBERTURA ==")
+    print("\n== COBERTURA ==")
     print(f"controlador: {len(rc.included)} canales útiles de {rc.total_columns} columnas")
     print(f"multipower : {len(rm.included)} canales útiles de {rm.total_columns} columnas")
     chans = tool("list_channels", {})["canales"]

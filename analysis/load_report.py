@@ -100,7 +100,7 @@ def render_load_report(load: Load, temp, refr, cfg: CoolingConfig, now: datetime
     head = f"Entró {load.t_in.astimezone(f.tz).strftime('%d/%m %H:%M')}"
     if load.entry_temp_c is not None:
         head += f" a {_n(load.entry_temp_c)} °C"
-    head += f"; " + (f"estuvo {perm}." if load.t_out else f"lleva {perm}.")
+    head += "; " + (f"estuvo {perm}." if load.t_out else f"lleva {perm}.")
     out = [f"INFORME DE INGRESO — {load.label()}", head]
     if not after:
         out.append("No hay lecturas de la termocupla desde que entró.")

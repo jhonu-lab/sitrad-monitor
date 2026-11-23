@@ -33,7 +33,7 @@ def load_config(path: str) -> dict:
             f"ERROR: configuración JSON inválida en {path}: {exc}",
             file=sys.stderr,
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
 
 # ============================================================================
@@ -364,12 +364,17 @@ def main() -> None:
             poll_seconds=float(sitrad_config.get("poll_seconds", 30)),
             alarms_every_s=float(sitrad_config.get("alarms_every_seconds", 60)),
             save_raw=bool(sitrad_config.get("save_raw", True)),
-            data_dir=sitrad_config.get("data_dir", "sitrad_data"),
+            # Misma carpeta que lee el agente (junto al programa), sin depender del CWD.
+            data_dir=str(_base_dir() / sitrad_config.get("data_dir", "sitrad_data")),
             announce_existing_alarms=bool(sitrad_config.get("announce_existing_alarms", False)),
             passthrough=bool(sitrad_config.get("passthrough", True)),
             instruments_override=sitrad_config.get("instruments_override") or {},
             channel_maps_by_type=sitrad_config.get("channel_maps_by_type") or {},
-            passthrough=bool(sitrad_config.get("passthrough", True)),   # ← NUEVO
+            # Multi-instrumento activado por defecto; cada instrumento va a un lugar.
+            multi_instrument=bool(sitrad_config.get("multi_instrument", True)),
+            locations=cfg.get("locations") or sitrad_config.get("locations"),
+            auto_locations=bool(sitrad_config.get("auto_locations", True)),
+            tz_name=tz_name,
         )
         try:
             source.discover()
@@ -398,9 +403,15 @@ def main() -> None:
                 except Exception:
                     logger.exception("Descubrimiento SITRAD falló; sigo con el instrumento configurado.")
         except Exception as exc:
-            raise SystemExit(f"ERROR al conectar con SITRAD: {exc}")
+            raise SystemExit(f"ERROR al conectar con SITRAD: {exc}") from exc
 
         logger.info("Fuente seleccionada: API local de SITRAD (instrumento %s).", source.instrument_id)
+        reg = getattr(source, "registry", None)
+        if reg is not None and reg.locations:
+            for loc in reg.locations.values():
+                logger.info("  · lugar %s [%s%s] device_id=%d ← %s", loc.name, loc.kind,
+                            ", informe de frío" if loc.cooling else "", loc.device_id,
+                            ", ".join(loc.instrument_names))
 
     # ------------------------------------------------------------------
     # Almacenamiento temporal
@@ -415,8 +426,21 @@ def main() -> None:
         24,
     )
 
+    # Canales "conocidos": catálogo + los nombres que el config mapea a mano.
+    from core.channel_catalog import make_catalog_predicate
+
+    sitrad_cfg = cfg.get("sitrad", {}) or {}
+    catalog_extra = set((sitrad_cfg.get("channel_map") or {}).keys())
+    for m in (sitrad_cfg.get("channel_maps_by_type") or {}).values():
+        catalog_extra.update((m or {}).keys())
+    is_catalogued = make_catalog_predicate(catalog_extra)
+
+    # Los canales passthrough (parámetros internos del controlador) guardan menos
+    # historia en memoria que los catalogados.
     store = SeriesStore(
         max_hours=max_hours,
+        short_max_hours=storage_config.get("passthrough_max_hours", 24),
+        is_long=is_catalogued,
     )
 
     logger.info(
@@ -463,10 +487,10 @@ def main() -> None:
 
     profile = BehaviorProfile(
         config={
-            "learning_hours": analysis_config.get(
-                "learning_hours", 2.0,
-            ),
+            "learning_hours": analysis_config.get("learning_hours", 2.0),
             "tz_name": tz_name,
+            "profile_refit_minutes": analysis_config.get("profile_refit_minutes", 30),
+            "profile_learning_refit_minutes": analysis_config.get("profile_learning_refit_minutes", 5),
         },
         analysis=engine,
     )
@@ -508,12 +532,6 @@ def main() -> None:
 
     policy = ReportPolicy(config={
         **analysis_config,
-        "event_settle_seconds": analysis_config.get(
-            "event_settle_seconds", 60,
-        ),
-        "event_dedup_margin_seconds": analysis_config.get(
-            "event_dedup_margin_seconds", 60,
-        ),
         "max_messages_per_hour": ops.get(
             "max_messages_per_hour", 12,
         ),
@@ -602,6 +620,17 @@ def main() -> None:
     # Agente
     # ------------------------------------------------------------------
 
+    # Lugar por defecto: el del instrument_id configurado, o el primero con informe de frío.
+    primary_device = int(cava_config["device_id"])
+    reg = getattr(source, "registry", None)
+    if reg is not None and reg.locations:
+        loc = (reg.location_of_instrument(source.instrument_id)
+               if getattr(source, "instrument_id", None) is not None else None)
+        if loc is None:
+            cooling = [x for x in reg.locations.values() if x.cooling]
+            loc = cooling[0] if cooling else next(iter(reg.locations.values()))
+        primary_device = loc.device_id
+
     from agent.cava_agent import CavaAgent
     agent = CavaAgent(
         llm=llm,
@@ -609,7 +638,7 @@ def main() -> None:
         store=store,
         context_serializer=serializer,
         memory=memory,
-        device_id=int(cava_config["device_id"]),
+        device_id=primary_device,
         clock=clock,
         levels_provider=detector.consistency_levels,
         alarms_path=_base_dir() / cfg.get("sitrad", {}).get("data_dir", "sitrad_data")
@@ -647,7 +676,8 @@ def main() -> None:
 
     telegram_config = cfg["telegram"]
 
-    token = str(telegram_config.get("token", "") or "").strip()
+    # El token puede ir en la variable de entorno TELEGRAM_BOT_TOKEN (recomendado).
+    token = str(telegram_config.get("token", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
 
     # Sin token (o con "enabled": false) se usa la consola: los informes
     # se imprimen y las preguntas se escriben en la terminal.
@@ -657,8 +687,14 @@ def main() -> None:
 
         inner = TelegramReporter(
             bot_token=token,
-            chat_id=telegram_config.get("chat_id", ""),
+            chat_id=telegram_config.get("chat_id", "") or os.environ.get("TELEGRAM_CHAT_ID", ""),
+            extra_chat_ids=telegram_config.get("chat_ids") or (),
+            allowed_user_ids=telegram_config.get("allowed_user_ids"),
+            group_requires_mention=bool(telegram_config.get("group_requires_mention", True)),
         )
+        if not inner.chat_ids:
+            logger.warning("Telegram sin chat_id: el bot contestará en cualquier chat, "
+                           "pero las alertas no tienen destino.")
 
         telegram = RetryNotifier(
             inner=inner,
@@ -694,10 +730,15 @@ def main() -> None:
 
         "registry": getattr(source, "registry", None),
         "monitored_device_ids": (
-            source.registry.device_ids()
+            source.registry.location_ids()
             if getattr(source, "registry", None) is not None
             else [int(cava_config["device_id"])]
         ),
+        # Preguntas y redacción del LLM en un hilo aparte (el ciclo no espera al modelo).
+        "async_agent": bool(ops.get("agent_worker", True)),
+        # EventEngine / perfil / anomalías solo sobre canales catalogados ("all" = todos).
+        "analysis_channels": analysis_config.get("analysis_channels", "catalog"),
+        "catalog_extra_channels": sorted(catalog_extra),
 
         "channels_que_disparan_eventos": analysis_config.get(
             "channels_que_disparan_eventos",
@@ -733,9 +774,7 @@ def main() -> None:
             "device_name"
         ],
 
-        "device_id": cava_config[
-            "device_id"
-        ],
+        "device_id": primary_device,
         "compressor_channel": cava_config.get(
             "compressor_channel", ROLE_TO_CHANNEL["compresor"]),
 
@@ -744,16 +783,6 @@ def main() -> None:
         "operations": ops,                      # zona horaria, latido, etc.
         "storage": storage_config,
         "mode": mode,
-
-        "event_dedup_margin_seconds": analysis_config.get(
-            "event_dedup_margin_seconds",
-            60,
-        ),
-
-        "event_settle_seconds": analysis_config.get(
-            "event_settle_seconds",
-            60,
-        ),
 
         "analysis_every_seconds": cfg.get(
             "analysis_every_seconds", 30,
@@ -825,6 +854,35 @@ def main() -> None:
     reporter.case_log = CaseLog(
         storage_config.get("cases_log", "logs/cases.jsonl")
     )
+
+    # ------------------------------------------------------------------
+    # Limpieza programada de datos (no llenar el disco)
+    # ------------------------------------------------------------------
+    from agent.cava_agent import CHART_DIR
+    from core.retention import RetentionManager
+
+    cooling_cfg = cfg.get("cooling", {}) or {}
+    data_dir = str(_base_dir() / sitrad_cfg.get("data_dir", "sitrad_data"))
+    reporter.retention = RetentionManager.from_config(
+        storage_config.get("retention", {}),
+        paths={
+            "observations": observations_log,
+            "raw_readings": os.path.join(data_dir, "lecturas.jsonl"),
+            "events": events_log,
+            "reports": report_log,
+            "cases": storage_config.get("cases_log", "logs/cases.jsonl"),
+            "cooling_cases": cooling_cfg.get("cases_path", "logs/cooling_cases.jsonl"),
+            "feedback": cooling_cfg.get("feedback_path", "logs/feedback.jsonl"),
+            "episodes": storage_config.get("episodes_log", "logs/episodes.jsonl"),
+            "conversations": ops.get("conversations_log", "logs/conversations.jsonl"),
+            "alarms": os.path.join(data_dir, "sitrad_alarms.jsonl"),
+            "sim_truth": cava_config.get("truth_log", "logs/sim_truth.jsonl"),
+            "charts": CHART_DIR,
+            "exports": os.path.join("logs", "exports"),
+        },
+        tz_name=tz_name,
+        observations_keep_days=rotation.get("keep_days", 7),
+    )
     # ------------------------------------------------------------------
     # Ejecución
     # ------------------------------------------------------------------
@@ -840,7 +898,7 @@ def main() -> None:
             hours = min(float(storage_config.get("max_hours", 168)), float(store.max_hours))
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
             n = 0
-            for r in file_log.read_observations_since(cutoff):
+            for r in file_log.iter_observations_since(cutoff):
                 store.ingest(quality_guard.apply(r))
                 n += 1
             logger.info("FileLog replay: %d lecturas desde %s.", n, cutoff.isoformat())

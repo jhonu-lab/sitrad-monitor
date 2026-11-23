@@ -136,8 +136,9 @@ def simulate(*, config="config.json", out="logs/validation", days=4.0, seed=42,
             opened = pol.open_incidents
             for u in tracker.check(
                     t, opened.keys(),
-                    lambda k: assess(series, opened[k]["kind"], opened[k]["severity_max"]),
-                    lambda k: opened[k]):
+                    lambda k, series=series, opened=opened: assess(
+                        series, opened[k]["kind"], opened[k]["severity_max"]),
+                    lambda k, opened=opened: opened[k]):
                 inc = u.incident
                 payload = {"incident_kind": inc["kind"],
                            "channels": sorted(inc["channels"]),

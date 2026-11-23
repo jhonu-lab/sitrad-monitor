@@ -23,6 +23,7 @@ Todo es determinista (sin LLM): el texto del usuario solo rellena campos.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import unicodedata
@@ -31,6 +32,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
 from core.clock import local_tz
+
+logger = logging.getLogger(__name__)
 
 GOOD = ("VALID", "FROZEN")
 
@@ -124,10 +127,15 @@ class ProductLog:
                 d["t_in"] = l.t_in.isoformat()
                 d["t_out"] = l.t_out.isoformat() if l.t_out else None
                 rows.append(d)
-            with open(self.path, "w", encoding="utf-8") as fh:
+            # Escritura atómica: un corte de luz a mitad no deja el archivo vacío.
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump({"products": self.rules, "loads": rows}, fh, ensure_ascii=False, indent=1)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
         except Exception:
-            pass
+            logger.exception("No pude guardar %s", self.path)
 
     # ---------- catálogo ----------
     def canonical(self, name: str) -> str:
@@ -333,11 +341,6 @@ def parse_message(text: str, now: datetime, tz_name: str = "America/Bogota", kno
         out["entry_temp_c"] = _num(mtmp.group(1)) if mtmp else None
     return out
 
-
-def parse_load(text: str, now: datetime, tz_name: str = "America/Bogota", known=()) -> dict | None:
-    """Compatibilidad: solo si el mensaje registra una carga."""
-    d = parse_message(text, now, tz_name, known)
-    return d if d and d["kind"] in ("load", "both") else None
 
 
 def parse_removal(text: str, known=()) -> tuple[bool, str | None]:

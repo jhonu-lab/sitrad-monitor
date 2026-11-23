@@ -28,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.channel_catalog import (
     CONTROLLER_SPECS,
     MULTIPOWER_SPECS,
-    SPEC_BY_NAME,
     norm_col,
 )
 from core.sitrad_mapping import key, match_columns
@@ -43,7 +42,7 @@ def _read_excel_any(path: str) -> tuple[pd.DataFrame, int]:
     la que más columnas no vacías tenga. Tolera .xlsx y .xls."""
     book = pd.read_excel(path, sheet_name=None, header=None, dtype=object)
     best_df, best_row, best_score = None, 0, -1
-    for sheet_name, df in book.items():
+    for df in book.values():
         for row_idx in range(min(10, len(df))):
             row = df.iloc[row_idx]
             non_empty = sum(1 for v in row if v is not None and str(v).strip() and str(v) != "nan")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 # core.series_store
+import threading
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Callable
 
 from core.contracts import ChannelReading, DataQuality
 
@@ -20,103 +23,154 @@ class Bucket:
 
 class SeriesStore:
     """
-    Almacena lecturas recientes y las agrupa en buckets de 1 minuto.
+    Almacena lecturas recientes por (device_id, canal) y las agrupa en buckets de 1 minuto.
 
     Las estadísticas de temperatura se calculan usando cobertura temporal:
     cada lectura representa el intervalo comprendido entre su timestamp
     y el timestamp de la siguiente lectura.
 
-    Una lectura VALID aporta a:
-      - mean
-      - minimum
-      - maximum
-      - covered_seconds
+    Retención:
+        * max_hours          para los canales "largos" (catalogados).
+        * short_max_hours    para el resto (passthrough), si se indica
+                             `is_long`. Con 137 canales a 30 s, 7 días de
+                             passthrough son ~2,7 M objetos en memoria.
 
-    Los periodos sin lectura VALID se contabilizan como gap_seconds.
+    Concurrencia: el ciclo principal escribe y el hilo del agente lee.
+    Todas las operaciones toman un lock y las consultas devuelven copias.
     """
 
     BUCKET_SECONDS = 60
+    # La poda se hace por lotes: solo cuando lo más viejo supera el corte
+    # en más de este margen (evita mover la lista en cada lectura).
+    PRUNE_SLACK = timedelta(minutes=10)
+    # Barrido completo (series de canales que dejaron de reportar).
+    SWEEP_EVERY = timedelta(minutes=30)
 
-    def __init__(self, max_hours: float = 4.0) -> None:
+    def __init__(
+        self,
+        max_hours: float = 4.0,
+        short_max_hours: float | None = None,
+        is_long: Callable[[str], bool] | None = None,
+    ) -> None:
         if max_hours <= 0:
             raise ValueError("max_hours debe ser mayor que cero.")
 
         self.max_hours = float(max_hours)
         self.max_age = timedelta(hours=self.max_hours)
+        if short_max_hours is not None and is_long is not None:
+            self.short_max_age = timedelta(hours=min(float(short_max_hours), self.max_hours))
+        else:
+            self.short_max_age = self.max_age
+        self._is_long = is_long
 
-        self._readings: dict[
-            tuple[int, str],
-            list[ChannelReading],
-        ] = {}
+        self._readings: dict[tuple[int, str], list[ChannelReading]] = {}
+        self._times: dict[tuple[int, str], list[datetime]] = {}
+        self._max_age_of: dict[tuple[int, str], timedelta] = {}
+        self._lock = threading.RLock()
+        self._last_sweep: datetime | None = None
+        self._latest: datetime | None = None
 
     # ------------------------------------------------------------------
     # INGESTA
     # ------------------------------------------------------------------
 
+    def _age_for(self, key: tuple[int, str]) -> timedelta:
+        age = self._max_age_of.get(key)
+        if age is None:
+            if self._is_long is None or self._is_long(key[1]):
+                age = self.max_age
+            else:
+                age = self.short_max_age
+            self._max_age_of[key] = age
+        return age
+
     def ingest(self, reading: ChannelReading) -> None:
         """
         Incorpora una lectura.
 
-        Las lecturas con timestamp anterior a la última almacenada
-        se ignoran para evitar romper la continuidad temporal.
+        Las lecturas con timestamp igual o anterior a la última almacenada
+        se ignoran (duplicados al reiniciar / continuidad temporal).
         """
-
         key = (reading.device_id, reading.channel)
+        t = reading.event_time
+        with self._lock:
+            times = self._times.get(key)
+            if times is None:
+                times = self._times[key] = []
+                self._readings[key] = []
+            elif times and t <= times[-1]:
+                return
+            times.append(t)
+            self._readings[key].append(reading)
+            if self._latest is None or t > self._latest:
+                self._latest = t
 
-        series = self._readings.setdefault(key, [])
+            # Poda por lotes de ESTA serie.
+            cutoff = t - self._age_for(key)
+            if times[0] < cutoff - self.PRUNE_SLACK:
+                self._cut(key, cutoff)
 
-        if series and reading.event_time <= series[-1].event_time:
-            return
+            if self._last_sweep is None:
+                self._last_sweep = t
+            elif t - self._last_sweep >= self.SWEEP_EVERY:
+                self._last_sweep = t
+                self._sweep(t)
 
-        series.append(reading)
+    def ingest_many(self, readings) -> None:
+        for r in readings:
+            self.ingest(r)
 
-        self._prune(reading.event_time)
+    def _cut(self, key: tuple[int, str], cutoff: datetime) -> None:
+        times = self._times[key]
+        i = bisect_left(times, cutoff)
+        if i:
+            del times[:i]
+            del self._readings[key][:i]
+        if not times:
+            del self._times[key]
+            del self._readings[key]
+
+    def _sweep(self, now: datetime) -> None:
+        """Poda todas las series (incluidas las que ya no reciben datos)."""
+        for key in list(self._times):
+            self._cut(key, now - self._age_for(key))
+
+    def _prune(self, now: datetime) -> None:
+        """Compatibilidad: poda completa respecto a `now`."""
+        with self._lock:
+            self._sweep(now)
 
     # ------------------------------------------------------------------
     # CONSULTA
     # ------------------------------------------------------------------
 
-    def latest(
-        self,
-        device_id: int,
-        channel: str,
-    ) -> ChannelReading | None:
-        """
-        Devuelve la última lectura disponible.
-        """
+    def latest(self, device_id: int, channel: str) -> ChannelReading | None:
+        """Devuelve la última lectura disponible."""
+        with self._lock:
+            series = self._readings.get((device_id, channel))
+            return series[-1] if series else None
 
-        series = self._readings.get((device_id, channel))
-
-        if not series:
-            return None
-
-        return series[-1]
-
-    def latest_value(
-        self,
-        device_id: int,
-        channel: str,
-    ) -> float | None:
-        """
-        Devuelve el último valor numérico disponible de una lectura
-        VALID o FROZEN.
-        """
-
+    def latest_value(self, device_id: int, channel: str) -> float | None:
+        """Último valor numérico de una lectura VALID o FROZEN."""
         reading = self.latest(device_id, channel)
-
-        if reading is None:
+        if reading is None or reading.value is None:
             return None
-
-        if reading.value is None:
+        if reading.quality not in {DataQuality.VALID, DataQuality.FROZEN}:
             return None
-
-        if reading.quality not in {
-            DataQuality.VALID,
-            DataQuality.FROZEN,
-        }:
-            return None
-
         return reading.value
+
+    def latest_times(self, device_id: int) -> dict[str, datetime]:
+        """Canal -> timestamp de su última lectura (para el chequeo de salud)."""
+        with self._lock:
+            return {c: t[-1] for (d, c), t in self._times.items() if d == device_id and t}
+
+    def _slice(self, key, start, end) -> list[ChannelReading]:
+        times = self._times.get(key)
+        if not times:
+            return []
+        i = bisect_left(times, start) if start is not None else 0
+        j = bisect_right(times, end) if end is not None else len(times)
+        return self._readings[key][i:j]
 
     def buckets(
         self,
@@ -125,42 +179,12 @@ class SeriesStore:
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> list[Bucket]:
-        """
-        Construye y devuelve buckets de 1 minuto.
-
-        Si start/end no se proporcionan, se utilizan todas las lecturas
-        disponibles de la serie.
-        """
-
-        series = self._readings.get((device_id, channel), [])
-
-        if not series:
-            return []
-
-        readings = series
-
-        if start is not None:
-            readings = [
-                reading
-                for reading in readings
-                if reading.event_time >= start
-            ]
-
-        if end is not None:
-            readings = [
-                reading
-                for reading in readings
-                if reading.event_time <= end
-            ]
-
+        """Buckets de 1 minuto (todas las lecturas si no hay start/end)."""
+        with self._lock:
+            readings = self._slice((device_id, channel), start, end)
         if not readings:
             return []
-
-        return self._build_buckets(
-            readings,
-            start=start,
-            end=end,
-        )
+        return self._build_buckets(readings, start=start, end=end)
 
     # ------------------------------------------------------------------
     # BUCKETS
@@ -381,28 +405,6 @@ class SeriesStore:
     # RETENCIÓN
     # ------------------------------------------------------------------
 
-    def _prune(self, now: datetime) -> None:
-        """
-        Elimina lecturas anteriores a max_hours.
-        """
-
-        cutoff = now - self.max_age
-
-        for key, series in list(self._readings.items()):
-            first_valid_index = 0
-
-            while (
-                first_valid_index < len(series)
-                and series[first_valid_index].event_time < cutoff
-            ):
-                first_valid_index += 1
-
-            if first_valid_index:
-                self._readings[key] = series[first_valid_index:]
-
-            if not self._readings[key]:
-                del self._readings[key]
-
     def get_series(
         self,
         device_id: int,
@@ -412,171 +414,86 @@ class SeriesStore:
         minutes: float | None = None,
     ) -> list[ChannelReading]:
         """
-        Devuelve las lecturas de un canal concreto.
+        Lecturas de un canal, por start/end o por minutes.
 
-        Se puede consultar mediante:
-            - start/end
-            - minutes
-
-        Si se utiliza minutes y no se proporciona end,
-        se toma como referencia la última lectura disponible
-        del canal.
+        Con minutes y sin end, la referencia es la última lectura del canal.
         """
-
         if minutes is not None and minutes <= 0:
-            raise ValueError(
-                "minutes debe ser mayor que cero."
-            )
+            raise ValueError("minutes debe ser mayor que cero.")
+        key = (device_id, channel)
+        with self._lock:
+            times = self._times.get(key)
+            if not times:
+                return []
+            if minutes is not None:
+                reference = end if end is not None else times[-1]
+                start = reference - timedelta(minutes=minutes)
+            return self._slice(key, start, end)
 
-        series = self._readings.get(
-            (device_id, channel),
-            [],
-        )
+    def device_series(
+        self,
+        device_id: int,
+        minutes: float | None = None,
+        channels: Callable[[str], bool] | None = None,
+    ) -> dict[str, list[ChannelReading]]:
+        """
+        Canal -> lecturas de UN dispositivo en la ventana `minutes`, contada
+        desde la última lectura de ese dispositivo. `channels` filtra canales.
+        """
+        if minutes is not None and minutes <= 0:
+            raise ValueError("minutes debe ser mayor que cero.")
+        with self._lock:
+            keys = [k for k in self._times if k[0] == device_id
+                    and (channels is None or channels(k[1]))]
+            if not keys:
+                return {}
+            cutoff = None
+            if minutes is not None:
+                latest = max(self._times[k][-1] for k in keys)
+                cutoff = latest - timedelta(minutes=minutes)
+            out: dict[str, list[ChannelReading]] = {}
+            for k in keys:
+                sel = self._slice(k, cutoff, None)
+                if sel:
+                    out[k[1]] = sel
+            return out
 
-        if not series:
-            return []
-
-        readings = list(series)
-
-        # ---------------------------------------------------------
-        # Determinar ventana por minutos
-        # ---------------------------------------------------------
-
-        if minutes is not None:
-
-            reference = (
-                end
-                if end is not None
-                else readings[-1].event_time
-            )
-
-            start = (
-                reference
-                - timedelta(minutes=minutes)
-            )
-
-        # ---------------------------------------------------------
-        # Aplicar límites
-        # ---------------------------------------------------------
-
-        if start is not None:
-            readings = [
-                reading
-                for reading in readings
-                if reading.event_time >= start
-            ]
-
-        if end is not None:
-            readings = [
-                reading
-                for reading in readings
-                if reading.event_time <= end
-            ]
-
-        return readings
     def all_series(
         self,
         minutes: float | None = None,
     ) -> dict[str, list[ChannelReading]]:
         """
-        Devuelve todas las series disponibles agrupadas por
-        dispositivo y canal.
+        Todas las series con claves "{device_id}:{channel}".
 
-        Las claves tienen el formato:
-
-            "{device_id}:{channel}"
-
-        Ejemplo:
-
-            {
-                "201:Temp Producto": [...],
-                "201:Temp Evaporador": [...],
-                "202:Temp Producto": [...],
-            }
-
-        Si minutes se especifica, solamente devuelve las lecturas
-        correspondientes a esa ventana temporal.
+        Con minutes, la ventana se cuenta desde la última lectura global.
+        Para un solo dispositivo es mucho más barato `device_series`.
         """
-
         if minutes is not None and minutes <= 0:
-            raise ValueError(
-                "minutes debe ser mayor que cero."
-            )
+            raise ValueError("minutes debe ser mayor que cero.")
+        with self._lock:
+            if self._latest is None:
+                return {}
+            cutoff = None if minutes is None else self._latest - timedelta(minutes=minutes)
+            result: dict[str, list[ChannelReading]] = {}
+            for (device_id, channel) in self._times:
+                sel = self._slice((device_id, channel), cutoff, None)
+                if sel:
+                    result[f"{device_id}:{channel}"] = sel
+            return result
 
-        latest = max(
-            (
-                series[-1].event_time
-                for series in self._readings.values()
-                if series
-            ),
-            default=None,
-        )
-
-        if latest is None:
-            return {}
-
-        if minutes is None:
-            cutoff = None
-        else:
-            cutoff = (
-                latest
-                - timedelta(minutes=minutes)
-            )
-
-        result: dict[
-            str,
-            list[ChannelReading],
-        ] = {}
-
-        for (
-            device_id,
-            channel,
-        ), readings in self._readings.items():
-
-            if cutoff is not None:
-                selected = [
-                    reading
-                    for reading in readings
-                    if reading.event_time >= cutoff
-                ]
-            else:
-                selected = list(readings)
-
-            if not selected:
-                continue
-
-            key = f"{device_id}:{channel}"
-
-            result[key] = selected
-
-        return result
-
-    def channels(
-        self,
-        device_id: int | None = None,
-    ) -> list[str]:
+    def channels(self, device_id: int | None = None) -> list[str]:
         """
-        Devuelve los nombres de canal conocidos.
-
-        Si device_id es None:
-            devuelve todos los canales con formato
-            "device_id:channel".
-
-        Si se proporciona device_id:
-            devuelve solamente los canales de ese dispositivo.
+        Nombres de canal conocidos ("device_id:channel" si device_id es None).
         """
-
+        with self._lock:
+            keys = list(self._times)
         if device_id is None:
-            return sorted(
-                f"{d}:{c}"
-                for (d, c) in self._readings.keys()
-            )
+            return sorted(f"{d}:{c}" for (d, c) in keys)
+        return sorted(c for (d, c) in keys if d == device_id)
 
-        return sorted(
-            c
-            for (d, c) in self._readings.keys()
-            if d == device_id
-        )
+    def device_ids(self) -> list[int]:
+        with self._lock:
+            return sorted({d for d, _ in self._times})
 
     @staticmethod
     def _floor_to_minute(timestamp: datetime) -> datetime:

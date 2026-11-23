@@ -18,6 +18,10 @@ Comportamiento:
   * Deduplicación por timestamp: si el instrumento no actualizó, no reingesta.
   * Alarmas nuevas se entregan una sola vez (new_alarms) y se persisten en
     sitrad_data/sitrad_alarms.jsonl.
+  * Multi-instrumento (por defecto): cada instrumento pertenece a un LUGAR
+    (cava, horno, caldera...). Un lugar puede agrupar varios instrumentos y
+    sus canales se publican bajo un mismo device_id. Ver `locations` en el
+    config y LocationInfo.
 """
 from __future__ import annotations
 
@@ -27,7 +31,8 @@ import os
 import re
 import sys
 import warnings
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,6 +40,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 from core.channel_catalog import CONTROLLER_SPECS, norm_col
+from core.clock import local_tz
 from core.contracts import ChannelReading, DataQuality, Snapshot
 from core.sitrad_mapping import key, match_columns, parse_datetime_any, parse_number, parse_state
 
@@ -233,15 +239,6 @@ class SitradApi:
                 continue
         return []
 
-    def alarms_of(self, instrument_id) -> list[dict]:
-        """Alarmas configuradas de un instrumento (si el endpoint existe)."""
-        for path in (f"/instruments/{instrument_id}/alarms",
-                     f"/instruments/{instrument_id}/alarms/config"):
-            try:
-                return list(self.get_json(path).get("results", []))
-            except Exception:
-                continue
-        return []
 
     def instruments(self) -> list[dict]:
         return list(self.get_json("/instruments").get("results", []))
@@ -314,8 +311,54 @@ class InstrumentInfo:
     status: str | None = None
 
 
+# Tipos de lugar en los que aplica el informe de temperatura (cadena de frío).
+COOLING_KINDS = frozenset({"cava", "camara", "cuarto frio", "cuarto_frio", "nevera",
+                           "congelador", "refrigerador", "tunel", "tunel de frio"})
+# Tipo de lugar por defecto según el tipo de instrumento, para lugares automáticos.
+KIND_BY_TYPE = {"tc900e": "cava", "multipower": "energia", "generic": "otro"}
+
+
+def _norm_text(s) -> str:
+    s = unicodedata.normalize("NFD", str(s or "").strip().lower())
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _slug(s) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _norm_text(s)).strip("_") or "lugar"
+
+
+@dataclass
+class LocationInfo:
+    """Un lugar físico (cava, horno, caldera...) con uno o varios instrumentos.
+
+    Todos sus canales se guardan bajo `device_id`. Expone `instrument_id`,
+    `type` y `n_channels_effective` para ser intercambiable con
+    InstrumentInfo en el código que solo necesita "un dispositivo".
+    """
+    device_id: int
+    key: str
+    name: str
+    kind: str
+    instrument_ids: list[int]
+    cooling: bool
+    types: tuple[str, ...] = ()
+    instrument_names: tuple[str, ...] = ()
+    n_channels_effective: int = 0
+    auto: bool = False
+
+    @property
+    def instrument_id(self) -> int | None:
+        return self.instrument_ids[0] if self.instrument_ids else None
+
+    @property
+    def type(self) -> str:
+        if "tc900e" in self.types:
+            return "tc900e"
+        return self.types[0] if self.types else "generic"
+
+
 class InstrumentRegistry:
-    """Descubre y clasifica todos los instrumentos del servidor SITRAD."""
+    """Descubre y clasifica todos los instrumentos del servidor SITRAD y los agrupa en lugares."""
 
     def __init__(
         self,
@@ -323,6 +366,9 @@ class InstrumentRegistry:
         type_overrides: dict | None = None,
         channel_maps_by_type: dict | None = None,
         default_channel_map: dict | None = None,
+        locations_config: list | dict | None = None,
+        auto_locations: bool = True,
+        only_instruments: list | None = None,
     ) -> None:
         self.api = api
         self.type_overrides = {str(k): str(v) for k, v in (type_overrides or {}).items()}
@@ -330,6 +376,14 @@ class InstrumentRegistry:
         self.default_channel_map = default_channel_map or {}
         self.instruments: dict[int, InstrumentInfo] = {}
         self._converters: list[dict] = []
+        # Lugares
+        if isinstance(locations_config, dict):          # {"clave": {...}} también vale
+            locations_config = [{"key": k, **(v or {})} for k, v in locations_config.items()]
+        self.locations_config: list[dict] = list(locations_config or [])
+        self.auto_locations = bool(auto_locations)
+        self.only_instruments = None if only_instruments is None else [str(x) for x in only_instruments]
+        self.locations: dict[int, LocationInfo] = {}
+        self._loc_of_ins: dict[int, int] = {}
 
     # ----------------------------------------------------------------
     # Descubrimiento
@@ -358,6 +412,10 @@ class InstrumentRegistry:
                 continue
             ins_id = int(ins_id)
             ins_name = ins.get("name") or f"Instrumento {ins_id}"
+            if self.only_instruments is not None and not (
+                    str(ins_id) in self.only_instruments
+                    or _norm_text(ins_name) in {_norm_text(x) for x in self.only_instruments}):
+                continue
 
             try:
                 raw = self.api.values(ins_id)
@@ -372,12 +430,9 @@ class InstrumentRegistry:
             itype = self.type_overrides.get(str(ins_id)) or detect_instrument_type(labels)
             device_id = 1000 + ins_id
 
-            if itype in self.channel_maps_by_type:
-                channel_map = self.channel_maps_by_type[itype]
-            elif itype in ("tc900e", "multipower"):
-                channel_map = channel_map_for_type(itype)
-            else:
-                channel_map = self.default_channel_map
+            # Mapa del tipo + channel_map del config + el específico del tipo (este manda).
+            channel_map = {**channel_map_for_type(itype), **self.default_channel_map,
+                           **(self.channel_maps_by_type.get(itype) or {})}
 
             catalog = channels_for_type(itype)
             channels = [c["name"] for c in catalog]
@@ -410,11 +465,126 @@ class InstrumentRegistry:
                 status=ins.get("status"),
             )
 
+        self.build_locations()
         logger.info(
-            "InstrumentRegistry: %d convertidor(es), %d instrumento(s): %s.",
+            "InstrumentRegistry: %d convertidor(es), %d instrumento(s): %s. Lugares: %s.",
             len(self._converters), len(self.instruments), self.summary_text(),
+            self.locations_text(),
         )
         return self._tree()
+
+    # ----------------------------------------------------------------
+    # Lugares
+    # ----------------------------------------------------------------
+
+    def _resolve_instrument(self, ref) -> InstrumentInfo | None:
+        """Referencia de config -> instrumento: id de SITRAD (int/"5") o nombre."""
+        by_id = {i.instrument_id: i for i in self.instruments.values()}
+        try:
+            return by_id.get(int(ref))
+        except (TypeError, ValueError):
+            pass
+        want = _norm_text(ref)
+        for info in self.instruments.values():
+            if _norm_text(info.name) == want:
+                return info
+        return None
+
+    def build_locations(self) -> None:
+        """Agrupa los instrumentos descubiertos en lugares (config + automáticos)."""
+        self.locations = {}
+        self._loc_of_ins = {}
+        used: set[int] = set()
+
+        def add(loc: LocationInfo) -> None:
+            dev = loc.device_id
+            while dev in self.locations:            # device_id repetido: siguiente libre
+                dev += 1
+            if dev != loc.device_id:
+                logger.warning("Lugar '%s': device_id %d ocupado, uso %d.", loc.name, loc.device_id, dev)
+                loc.device_id = dev
+            self.locations[dev] = loc
+            for iid in loc.instrument_ids:
+                self._loc_of_ins[iid] = dev
+
+        for spec in self.locations_config:
+            if not isinstance(spec, dict):
+                continue
+            refs = spec.get("instruments", spec.get("instrumentos", [])) or []
+            if not isinstance(refs, (list, tuple)):
+                refs = [refs]
+            infos: list[InstrumentInfo] = []
+            for ref in refs:
+                info = self._resolve_instrument(ref)
+                if info is None:
+                    logger.warning("Lugar '%s': no encuentro el instrumento %r en SITRAD.",
+                                   spec.get("name", "?"), ref)
+                    continue
+                if info.instrument_id in used:
+                    logger.warning("El instrumento %s ya está asignado a otro lugar; se ignora en '%s'.",
+                                   info.name, spec.get("name", "?"))
+                    continue
+                used.add(info.instrument_id)
+                infos.append(info)
+            if not infos:
+                continue
+            first = infos[0]
+            kind = _norm_text(spec.get("kind") or spec.get("tipo") or KIND_BY_TYPE.get(first.type, "otro"))
+            cooling = spec.get("cooling", spec.get("informe_frio"))
+            name = str(spec.get("name") or spec.get("nombre") or first.name)
+            add(LocationInfo(
+                device_id=int(spec.get("device_id") or first.device_id),
+                key=str(spec.get("key") or _slug(name)),
+                name=name,
+                kind=kind,
+                instrument_ids=[i.instrument_id for i in infos],
+                cooling=(kind in COOLING_KINDS) if cooling is None else bool(cooling),
+                types=tuple(i.type for i in infos),
+                instrument_names=tuple(i.name for i in infos),
+                n_channels_effective=sum(i.n_channels_effective for i in infos),
+            ))
+
+        if self.auto_locations:
+            for info in sorted(self.instruments.values(), key=lambda i: i.instrument_id):
+                if info.instrument_id in used:
+                    continue
+                kind = KIND_BY_TYPE.get(info.type, "otro")
+                add(LocationInfo(
+                    device_id=info.device_id, key=_slug(info.name), name=info.name, kind=kind,
+                    instrument_ids=[info.instrument_id], cooling=kind in COOLING_KINDS,
+                    types=(info.type,), instrument_names=(info.name,),
+                    n_channels_effective=info.n_channels_effective, auto=True,
+                ))
+
+    def location_ids(self) -> list[int]:
+        return sorted(self.locations)
+
+    def location(self, device_id) -> LocationInfo | None:
+        try:
+            return self.locations.get(int(device_id))
+        except (TypeError, ValueError):
+            return None
+
+    def location_of_instrument(self, instrument_id) -> LocationInfo | None:
+        try:
+            dev = self._loc_of_ins.get(int(instrument_id))
+        except (TypeError, ValueError):
+            return None
+        return self.locations.get(dev) if dev is not None else None
+
+    def instruments_of(self, device_id) -> list[InstrumentInfo]:
+        loc = self.location(device_id)
+        if loc is None:
+            return []
+        by_id = {i.instrument_id: i for i in self.instruments.values()}
+        return [by_id[i] for i in loc.instrument_ids if i in by_id]
+
+    def locations_text(self) -> str:
+        if not self.locations:
+            return "ninguno"
+        return "; ".join(
+            f"{loc.name} [{loc.kind}, device_id={loc.device_id}: {', '.join(loc.instrument_names)}]"
+            for loc in self.locations.values())
 
     # ----------------------------------------------------------------
     # Consulta
@@ -450,7 +620,14 @@ class InstrumentRegistry:
             "unassigned_instruments": unassigned,
             "n_converters": len(by_conv),
             "n_instruments": len(self.instruments),
+            "locations": self.locations_tree(),
         }
+
+    def locations_tree(self) -> list[dict]:
+        return [{"device_id": loc.device_id, "name": loc.name, "kind": loc.kind,
+                 "cooling": loc.cooling, "instrument_ids": list(loc.instrument_ids),
+                 "instruments": list(loc.instrument_names), "auto": loc.auto}
+                for loc in self.locations.values()]
 
     def names_map(self) -> dict[int, str]:
         return {i.instrument_id: i.name for i in self.instruments.values()}
@@ -487,7 +664,11 @@ class SitradApiSource:
                  passthrough: bool = True,
                  instruments_override: dict | None = None,
                  channel_maps_by_type: dict | None = None,
-                 registry: "InstrumentRegistry | None" = None) -> None:
+                 registry: "InstrumentRegistry | None" = None,
+                 multi_instrument: bool = True,
+                 locations: list | dict | None = None,
+                 auto_locations: bool = True,
+                 tz_name: str = "America/Bogota") -> None:
         self.api = api
         self.device_id = int(device_id)              # legacy single
         self.instrument_id = instrument_id
@@ -502,8 +683,9 @@ class SitradApiSource:
         self.passthrough = bool(passthrough)
         self._spec = {s.name: s for s in CONTROLLER_SPECS}
         self._last_fetch: datetime | None = None
-        self._last_ts: dict[tuple[int, str], datetime] = {}   # (device_id, channel) → ts
+        self._last_ts: dict[tuple[int, str], datetime] = {}   # (device del instrumento, canal) → ts
         self._fail_streak = 0
+        self._ins_failing: set[int] = set()
         self._alarm_seen: set[str] = set()
         self._alarm_primed = False
         self._last_alarm_fetch: datetime | None = None
@@ -512,10 +694,18 @@ class SitradApiSource:
         if save_raw:
             self.data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Multi-instrumento
+        # Multi-instrumento (activado por defecto) y lugares
         self.registry: InstrumentRegistry | None = registry
         self.instruments_override = instruments_override or {}
         self.channel_maps_by_type = channel_maps_by_type or {}
+        self.multi_instrument = bool(multi_instrument)
+        self.locations_config = locations
+        self.auto_locations = bool(auto_locations)
+        self.tz = local_tz(tz_name)
+        # (device del lugar, canal) -> instrument_id que publica ese nombre.
+        # Si otro instrumento del mismo lugar trae el mismo canal, se publica
+        # como "Canal [Nombre del instrumento]".
+        self._channel_owner: dict[tuple[int, str], int] = {}
 
     # ------------------------------------------------------------------
     # Persistencia de alarmas
@@ -547,13 +737,26 @@ class SitradApiSource:
         El registry queda construido y `poll()` lo usará.
         """
         if self.registry is None:
+            only = None
+            if not self.multi_instrument and self.instrument_id is not None:
+                only = [self.instrument_id]
             self.registry = InstrumentRegistry(
                 self.api,
                 type_overrides=self.instruments_override,
                 channel_maps_by_type=self.channel_maps_by_type,
                 default_channel_map=self.channel_map,
+                locations_config=self.locations_config,
+                auto_locations=self.auto_locations,
+                only_instruments=only,
             )
             self.registry.discover_all()
+            if not self.multi_instrument and only is None:
+                # Sin instrument_id: el primer TC-900E (o el primero) es el único que se lee.
+                thermal = self.registry.by_type("tc900e")
+                first = thermal[0] if thermal else next(iter(self.registry.instruments.values()), None)
+                if first is not None:
+                    self.registry.instruments = {first.device_id: first}
+                    self.registry.build_locations()
 
         self._instrument_names = self.registry.names_map()
 
@@ -650,19 +853,44 @@ class SitradApiSource:
                     "collectedAt": now.isoformat(),
                     "instruments": [{"instrument": self.instrument, "values": results}],
                 }
-            with (self.data_dir / "lecturas.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            # Un archivo por día local: la limpieza programada borra los viejos.
+            day = now.astimezone(self.tz).strftime("%Y%m%d")
+            with (self.data_dir / f"lecturas.{day}.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         except Exception:
-            pass
+            logger.debug("No pude guardar la lectura cruda.", exc_info=True)
 
     # ------------------------------------------------------------------
     # Poll
     # ------------------------------------------------------------------
+    # Si SITRAD no respondía al arrancar, el registro queda vacío: se reintenta
+    # el descubrimiento cada tanto (sobre el MISMO objeto, que comparten el
+    # Reporter y el agente), y al volver aparecen los lugares.
+    REDISCOVER_EVERY_S = 60.0
+
+    def _maybe_rediscover(self, now: datetime) -> None:
+        if self.registry is None or self.registry.instruments:
+            return
+        last = getattr(self, "_last_rediscover", None)
+        if last is not None and (now - last).total_seconds() < self.REDISCOVER_EVERY_S:
+            return
+        self._last_rediscover = now
+        try:
+            self.registry.discover_all()
+        except Exception:
+            logger.debug("Redescubrimiento de SITRAD falló.", exc_info=True)
+            return
+        if self.registry.instruments:
+            self._instrument_names = self.registry.names_map()
+            logger.info("SITRAD disponible: %d instrumento(s) descubiertos. Lugares: %s.",
+                        len(self.registry.instruments), self.registry.locations_text())
+
     def poll(self, now: datetime) -> Snapshot:
         empty = Snapshot(source_id="sitrad_api", processing_time=now, readings=())
         if self._last_fetch is not None and (now - self._last_fetch).total_seconds() < self.poll_seconds:
             return empty
         self._last_fetch = now
+        self._maybe_rediscover(now)
 
         if self.registry is not None and self.registry.instruments:
             return self._poll_multi(now)
@@ -697,17 +925,35 @@ class SitradApiSource:
             out.append(self._reading(ch, v, t, flags, device_id=self.device_id))
         return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
 
+    def _channel_name(self, loc_dev: int, ch: str, info: "InstrumentInfo") -> str:
+        owner = self._channel_owner.setdefault((loc_dev, ch), info.instrument_id)
+        return ch if owner == info.instrument_id else f"{ch} [{info.name}]"
+
     def _poll_multi(self, now: datetime) -> Snapshot:
+        """Lee todos los instrumentos, lugar por lugar, y publica bajo el device_id del lugar."""
         out: list[ChannelReading] = []
-        for info in self.registry.instruments.values():
+        reg = self.registry
+        plan: list[tuple[int, InstrumentInfo]] = []
+        if reg.locations:
+            for loc in reg.locations.values():
+                plan.extend((loc.device_id, info) for info in reg.instruments_of(loc.device_id))
+        else:
+            plan = [(info.device_id, info) for info in reg.instruments.values()]
+
+        n_ok = 0
+        for loc_dev, info in plan:
             try:
                 results = self.api.values(info.instrument_id)
             except Exception as exc:
-                self._fail_streak += 1
-                if self._fail_streak in (1, 5) or self._fail_streak % 30 == 0:
-                    logger.warning("No pude leer instrumento %s (id=%s): %s",
+                if info.instrument_id not in self._ins_failing:
+                    self._ins_failing.add(info.instrument_id)
+                    logger.warning("No pude leer el instrumento %s (id=%s): %s",
                                    info.name, info.instrument_id, exc)
                 continue
+            n_ok += 1
+            if info.instrument_id in self._ins_failing:
+                self._ins_failing.discard(info.instrument_id)
+                logger.info("El instrumento %s (id=%s) responde de nuevo.", info.name, info.instrument_id)
             self._save_raw(now, results, info)
             variables = list(iter_variables(results))
             mapped = map_variables(variables, info.channel_map, passthrough=self.passthrough)
@@ -719,8 +965,18 @@ class SitradApiSource:
                 if v.ts is not None and last is not None and v.ts <= last:
                     continue
                 self._last_ts[key] = t
-                out.append(self._reading(ch, v, t, flags, device_id=info.device_id))
-        if self._fail_streak:
+                reading = self._reading(ch, v, t, flags, device_id=loc_dev)
+                name = self._channel_name(loc_dev, ch, info)
+                if name != ch:
+                    reading = replace(reading, channel=name)
+                out.append(reading)
+
+        if plan and n_ok == 0:
+            self._fail_streak += 1
+            if self._fail_streak in (1, 5) or self._fail_streak % 30 == 0:
+                logger.warning("SITRAD no responde (ningún instrumento leído, intento %d).", self._fail_streak)
+        elif self._fail_streak:
+            logger.info("SITRAD respondió de nuevo tras %d fallo(s).", self._fail_streak)
             self._fail_streak = 0
         return Snapshot(source_id="sitrad_api", processing_time=now, readings=tuple(out))
 
@@ -857,9 +1113,19 @@ class SitradApiSource:
             except Exception as exc:
                 logger.warning("discover_all: no pude leer %s (id=%s): %s", ins_name, ins_id, exc)
 
+            reg_info = loc = None
+            if self.registry is not None and ins_id is not None:
+                try:
+                    reg_info = self.registry.instruments.get(1000 + int(ins_id))
+                    loc = self.registry.location_of_instrument(ins_id)
+                except (TypeError, ValueError):
+                    pass
             entry = {
                 "id": ins_id,
                 "name": ins_name,
+                "type": reg_info.type if reg_info else None,
+                "device_id": loc.device_id if loc else (reg_info.device_id if reg_info else None),
+                "location": loc.name if loc else None,
                 "model": ins.get("modelId") or ins.get("modelVersion") or "",
                 "status": ins.get("status"),
                 "address": ins.get("address"),
@@ -879,6 +1145,7 @@ class SitradApiSource:
                 tree["unassigned_instruments"].append(entry)
 
         tree["converters"] = list(by_conv.values())
+        tree["locations"] = self.registry.locations_tree() if self.registry is not None else []
         tree["n_converters"] = len(tree["converters"])
         tree["n_instruments"] = len(instruments)
         tree["n_channels_total"] = (

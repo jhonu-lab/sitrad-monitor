@@ -77,7 +77,7 @@ class Mock:
                         "unit": "", "date": iso, "enabled": True})
             return out
         sensors, outputs = [], []
-        for i, (name, unit, ch, kind) in enumerate(COLS):
+        for name, unit, ch, kind in COLS:
             v = vals.get(ch)
             d = {"description": name, "currentValue": (1 if v else 0) if kind == "state" and v is not None else v,
                  "unitOfMeasure": unit, "readAt": ms}

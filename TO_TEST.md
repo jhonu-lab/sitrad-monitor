@@ -1,6 +1,12 @@
 # Pruebas manuales (con la cava)
 - [ ] `python tools/inspect_sitrad_api.py` → 23 canales mapeados, 20 efectivos, 3 con ⚠ (Puerta, Evaporador y el implausible/deshabilitado).
-- [ ] Arranque: log `FileLog replay: N lecturas`.
+- [ ] Arranque: log `FileLog replay: N lecturas` y una línea `· lugar ...` por lugar.
+- [ ] Con `locations` que junte el TC-900E y el Multipower: «¿qué instrumentos tienes?» muestra el lugar con ambos.
+- [ ] Con dos lugares: «cómo está el horno» / «temperatura de la cava 2» responden sobre el lugar correcto; las alertas llevan `[Lugar]`.
+- [ ] Pregunta desde un segundo chat (en `telegram.chat_ids`): la respuesta llega a ESE chat, no al principal.
+- [ ] Mientras el LLM redacta una respuesta larga, el log sigue mostrando lecturas de SITRAD (el ciclo no se detiene).
+- [ ] Arrancar con Ollama apagado y encenderlo después: las respuestas pasan a usar el modelo sin reiniciar.
+- [ ] Al día siguiente: existe `logs/observations.AAAAMMDD.jsonl` y `logs/.retention_state.json`.
 - [ ] «qué historia tienes» → rango y horas reales.
 - [ ] «cómo estuvo la cava ayer» → datos si hubo; «…la semana pasada» → «Solo tengo datos desde…».
 - [ ] «episodios de esta semana» y «resumen de episodios» → lista / por causa y tiempo total.
@@ -8,4 +14,4 @@
 - [ ] «calidad de los datos» → cobertura por canal; Puerta 0 % (deshabilitado).
 - [ ] «promedio de temperatura por día» → una fila por día; «exporta la temperatura de ayer a CSV» → archivo en `logs/exports/`.
 - [ ] «hay algún problema» → «sin Multipower: diagnóstico parcial» y `[AVISO] Datalogger al 100%`.
-- [ ] Modo demo: `qué instrumentos tienes` menciona Multipower; `hazme un gráfico` genera PNG.
+- [ ] Modo demo: «qué instrumentos tienes» menciona Multipower; «hazme un gráfico» genera PNG.

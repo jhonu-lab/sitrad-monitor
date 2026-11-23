@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
 from datetime import datetime
 
@@ -35,35 +36,44 @@ class RetryNotifier:
         self.retry_interval_s = retry_interval_seconds
         self.clock = clock or Clock()
 
-        self._queue: deque[tuple[datetime, str]] = deque()
+        # (encolado_en, texto, chat_id). Se usa desde el ciclo principal y
+        # desde el hilo del agente: todo acceso pasa por el lock.
+        self._queue: deque[tuple[datetime, str, str | None]] = deque()
+        self._lock = threading.RLock()
         self._last_attempt: datetime | None = None
 
     # ------------------------------------------------------------
     # ENVÍO
     # ------------------------------------------------------------
 
-    def send(self, text: str, chat_id: str | None = None) -> bool:
+    def _targets(self, chat_id: str | None) -> list[str | None]:
+        """chat_id explícito -> solo ese. Sin chat_id -> todos los chats de alertas del notificador."""
+        if chat_id is not None:
+            return [chat_id]
+        chats = list(getattr(self.inner, "chat_ids", None) or [])
+        return chats or [None]
+
+    def _send_one(self, text: str, chat_id: str | None) -> bool:
         try:
-            ok = (
-                self.inner.send(text, chat_id=chat_id)
-                if chat_id is not None
-                else self.inner.send(text)
-            )
+            return bool(self.inner.send(text, chat_id=chat_id) if chat_id is not None
+                        else self.inner.send(text))
         except Exception:
             logger.exception("Notificador subyacente falló.")
-            ok = False
+            return False
 
-        if ok:
-            return True
-
-        self._queue.append((self.clock.now(), text, chat_id))
-        while len(self._queue) > self.max_retries:
-            self._queue.popleft()
-        logger.warning(
-            "Mensaje encolado para reintento. Cola=%d",
-            len(self._queue),
-        )
-        return False
+    def send(self, text: str, chat_id: str | None = None) -> bool:
+        ok_all = True
+        for target in self._targets(chat_id):
+            if self._send_one(text, target):
+                continue
+            ok_all = False
+            with self._lock:
+                self._queue.append((self.clock.now(), text, target))
+                while len(self._queue) > self.max_retries:
+                    self._queue.popleft()
+                n = len(self._queue)
+            logger.warning("Mensaje encolado para reintento (chat=%s). Cola=%d", target, n)
+        return ok_all
 
     # ------------------------------------------------------------
     # DRENAJE
@@ -79,33 +89,31 @@ class RetryNotifier:
         self._maybe_drain()
 
     def _maybe_drain(self) -> None:
-        if not self._queue:
-            return
-        now = self.clock.now()
-        if self._last_attempt is not None:
-            elapsed = (now - self._last_attempt).total_seconds()
-            if elapsed < self.retry_interval_s:
-                return
-        self._last_attempt = now
-        self._drain_once()
-    def _drain_once(self) -> None:
-        pending = len(self._queue)
-        for _ in range(pending):
+        with self._lock:
             if not self._queue:
-                break
-            item = self._queue.popleft()
-            _, text, chat_id = item if len(item) == 3 else (*item, None)
-            try:
-                ok = self.inner.send(text, chat_id=chat_id) if chat_id else self.inner.send(text)
-            except Exception:
-                ok = False
-            if not ok:
-                self._queue.appendleft((self.clock.now(), text, chat_id))
-                logger.warning(
-                    "Reintento fallido; quedan %d en cola.",
-                    len(self._queue),
-                )
                 return
+            now = self.clock.now()
+            if self._last_attempt is not None:
+                if (now - self._last_attempt).total_seconds() < self.retry_interval_s:
+                    return
+            self._last_attempt = now
+        self._drain_once()
+
+    def _drain_once(self) -> None:
+        with self._lock:
+            pending = len(self._queue)
+        for _ in range(pending):
+            with self._lock:
+                if not self._queue:
+                    break
+                _, text, chat_id = self._queue.popleft()
+            if not self._send_one(text, chat_id):
+                with self._lock:
+                    self._queue.appendleft((self.clock.now(), text, chat_id))
+                    n = len(self._queue)
+                logger.warning("Reintento fallido; quedan %d en cola.", n)
+                return
+
     # ------------------------------------------------------------
     # POLLING DE PREGUNTAS
     # ------------------------------------------------------------
@@ -136,7 +144,8 @@ class RetryNotifier:
 
     @property
     def pending(self) -> int:
-        return len(self._queue)
+        with self._lock:
+            return len(self._queue)
 
     @property
     def sent(self):
@@ -157,11 +166,13 @@ class RetryNotifier:
             return self.inner.pop_command()
         return None
 
-    def send_photo(self, path: str, caption: str = "") -> bool:
+    def send_photo(self, path: str, caption: str = "", chat_id: str | None = None) -> bool:
         fn = getattr(self.inner, "send_photo", None)
         if fn is None:
             return False
         try:
+            if chat_id is not None:
+                return bool(fn(path, caption, chat_id=chat_id))
             return bool(fn(path, caption))
         except Exception:
             logger.exception("RetryNotifier: send_photo falló.")

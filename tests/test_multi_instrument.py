@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 
-import pytest
 
 from core.channel_catalog import (
     detect_instrument_type,
@@ -14,9 +10,8 @@ from core.channel_catalog import (
     channel_map_for_type,
 )
 from sources.sitrad_api import (
-    InstrumentInfo, InstrumentRegistry, describe_alarm, map_variables,
+    InstrumentRegistry, describe_alarm,
 )
-from core.contracts import ChannelReading, DataQuality
 
 
 def test_detect_tc900e():

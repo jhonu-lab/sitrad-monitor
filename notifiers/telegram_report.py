@@ -13,6 +13,8 @@ Cambios respecto a la versión anterior
     * El backlog se descarta de verdad al arrancar (antes no avanzaba el
       offset, así que los mensajes viejos se contestaban igual).
     * Lista blanca opcional de usuarios (`allowed_user_ids`).
+    * Varios chats: `chat_id` + `extra_chat_ids` reciben las alertas; cada
+      respuesta vuelve al chat donde se hizo la pregunta.
 """
 
 from __future__ import annotations
@@ -25,7 +27,6 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Iterable, Optional
 
-from matplotlib import text
 import requests
 
 logger = logging.getLogger(__name__)
@@ -79,15 +80,23 @@ def parse_incoming(
     allowed_chat: str = "",
     allowed_user_ids: Optional[Iterable] = None,
     group_requires_mention: bool = True,
+    allowed_chats: Optional[Iterable] = None,
 ) -> Optional[Incoming]:
-    """Interpreta un `message` de Telegram. None = ignorar."""
+    """Interpreta un `message` de Telegram. None = ignorar.
+
+    `allowed_chats` (o el antiguo `allowed_chat`): si hay alguno, solo se
+    atienden esos chats. Vacío = cualquier chat.
+    """
     text = (message.get("text") or "").strip()
     if not text:
         return None
 
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id", ""))
-    if allowed_chat and chat_id != allowed_chat:
+    chats = {str(c) for c in (allowed_chats or ()) if str(c).strip()}
+    if allowed_chat:
+        chats.add(str(allowed_chat))
+    if chats and chat_id not in chats:
         return None
 
     frm = message.get("from") or {}
@@ -149,12 +158,19 @@ class TelegramReporter:
         send_timeout: int = 15,
         group_requires_mention: bool = True,
         allowed_user_ids: Optional[Iterable] = None,
+        extra_chat_ids: Optional[Iterable] = None,
     ) -> None:
         if not bot_token:
             raise ValueError("TelegramReporter requiere bot_token.")
 
         self.bot_token = str(bot_token)
         self.chat_id = str(chat_id or "").strip()
+        # Chats que reciben las alertas y desde los que se aceptan preguntas.
+        self.chat_ids: list[str] = []
+        for c in [self.chat_id, *(extra_chat_ids or ())]:
+            c = str(c or "").strip()
+            if c and c not in self.chat_ids:
+                self.chat_ids.append(c)
         self.poll_timeout = int(poll_timeout)
         self.poll_interval = float(poll_interval)
         self.send_timeout = int(send_timeout)
@@ -232,16 +248,15 @@ class TelegramReporter:
         except requests.exceptions.RequestException as exc:
             logger.error("Error enviando a Telegram (parte %d/%d): %s", i, n, exc)
             return False
-    
-    # Dentro de class TelegramReporter, después de send()
-    def send_photo(self, path: str, caption: str = "", chat_id=None) -> bool:
-        target = chat_id or getattr(self, "chat_id", None)
+
+    def send_photo(self, path: str, caption: str = "", chat_id: Optional[str] = None) -> bool:
+        target = str(chat_id or self.chat_id or "").strip()
         if not target:
             logger.warning("send_photo: no hay chat_id.")
             return False
         try:
             with open(path, "rb") as fh:
-                r = self._get_session("main").post(
+                r = self._get_session("send").post(
                     f"{self.base_url}/sendPhoto",
                     data={"chat_id": target, "caption": (caption or "")[:1024]},
                     files={"photo": fh},
@@ -286,7 +301,7 @@ class TelegramReporter:
     def _drain_backlog(self) -> None:
         """Descarta lo pendiente: pide lo último y avanza el offset tras ello."""
         try:
-            r = self._session.get(
+            r = self._get_session("poll").get(
                 f"{self.base_url}/getUpdates",
                 params={"offset": -1, "timeout": 0}, timeout=5,
             )
@@ -338,7 +353,7 @@ class TelegramReporter:
                 update.get("message") or {},
                 bot_username=self.bot_username,
                 bot_id=self.bot_id,
-                allowed_chat=self.chat_id,
+                allowed_chats=self.chat_ids,
                 allowed_user_ids=self.allowed_user_ids,
                 group_requires_mention=self.group_requires_mention,
             )
@@ -372,3 +387,5 @@ class TelegramReporter:
 
     def set_chat_id(self, chat_id: str) -> None:
         self.chat_id = str(chat_id or "").strip()
+        if self.chat_id and self.chat_id not in self.chat_ids:
+            self.chat_ids.insert(0, self.chat_id)

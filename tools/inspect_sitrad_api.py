@@ -11,13 +11,11 @@ Salida: una línea ✓ por canal válido, ⚠ por canal descartado,
 from __future__ import annotations
 
 import argparse
-from email.mime import base
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from pandas import api
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

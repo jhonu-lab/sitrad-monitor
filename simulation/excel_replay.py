@@ -125,7 +125,10 @@ def load_sitrad_table(path: str, tz_name: str = "America/Bogota", date_order: st
         vals = {}
         for ch, ci in cols.items():
             raw = rec.iloc[ci]
-            if spec_by[ch].kind == "state":
+            spec = spec_by.get(ch)
+            # match_columns también reconoce columnas sin spec en el catálogo (p. ej. "Salida HOT").
+            is_state = spec.kind == "state" if spec is not None else ch.startswith(("Estado", "Puerta", "Salida"))
+            if is_state:
                 vals[ch] = _state(raw)
                 states_seen.setdefault(ch, set()).add(str(raw))
             else:

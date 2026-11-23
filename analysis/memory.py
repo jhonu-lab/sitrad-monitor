@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from datetime import datetime
-from statistics import mean, stdev
+from statistics import mean
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.contracts import (
-    Baseline,
     ChannelReading,
     DataQuality,
     EventCandidate,
@@ -624,383 +622,31 @@ class HistoricalMemory:
     # BASELINE
     # ============================================================
 
-    def update_baseline(
-        self,
-        variable: str,
-        value: float,
-    ) -> Baseline:
-        """
-        Añade un nuevo valor al histórico de una variable
-        y devuelve la baseline resultante.
-
-        La baseline histórica se calcula a partir de los datos
-        observados por Memory.
-        """
-
-        variable = str(
-            variable
-        ).strip()
-
-        if not variable:
-            raise ValueError(
-                "variable no puede estar vacía."
-            )
-
-        value = float(
-            value
-        )
-
-        if not math.isfinite(
-            value
-        ):
-            raise ValueError(
-                "value debe ser finito."
-            )
-
-        self._values[
-            variable
-        ].append(
-            value
-        )
-
-        values = self._values[
-            variable
-        ]
-
-        deviation = (
-            stdev(values)
-            if len(values) >= 2
-            else 0.0
-        )
-
-        return Baseline(
-            variable=variable,
-            media=mean(values),
-            desviacion_estandar=deviation,
-            periodo_horas=0.0,
-        )
 
     # ============================================================
     # BASELINE ACTUAL
     # ============================================================
 
-    def get_baseline(
-        self,
-        variable: str,
-    ) -> Baseline | None:
-        """
-        Devuelve la baseline acumulada de una variable.
-        """
-
-        values = self._values.get(
-            variable
-        )
-
-        if not values:
-            return None
-
-        return Baseline(
-            variable=variable,
-            media=mean(values),
-            desviacion_estandar=(
-                stdev(values)
-                if len(values) >= 2
-                else 0.0
-            ),
-            periodo_horas=0.0,
-        )
 
     # ============================================================
     # COMPORTAMIENTO TÍPICO
     # ============================================================
 
-    def get_typical_behavior(
-        self,
-        variable: str,
-    ) -> dict[str, Any]:
-        """
-        Devuelve el comportamiento histórico de una variable.
-
-        Incluye:
-
-            - media
-            - variabilidad
-            - mínimo
-            - máximo
-            - número de observaciones
-            - comportamiento por hora
-            - comportamiento por día
-            - patrones de eventos relacionados
-
-        NOTA:
-        Actualmente los valores se alimentan de la evidencia
-        de eventos. La conexión directa con observations.jsonl
-        debe realizarse en una fase posterior.
-        """
-
-        values = self._values.get(
-            variable,
-            [],
-        )
-
-        if not values:
-
-            return {
-                "variable": variable,
-                "n": 0,
-                "media": None,
-                "desviacion_estandar": None,
-                "min": None,
-                "max": None,
-                "por_hora": {},
-                "por_dia": {},
-                "eventos_tipicos": [],
-            }
-
-        related_events = [
-            event
-            for event in self._events
-            if variable
-            in event.variables_afectadas
-        ]
-
-        hourly = self._hourly_behavior(
-            variable
-        )
-
-        daily = self._daily_behavior(
-            variable
-        )
-
-        typical_events = (
-            self._typical_events(
-                related_events
-            )
-        )
-
-        return {
-            "variable": variable,
-            "n": len(values),
-            "media": mean(values),
-            "desviacion_estandar": (
-                stdev(values)
-                if len(values) >= 2
-                else 0.0
-            ),
-            "min": min(values),
-            "max": max(values),
-            "por_hora": hourly,
-            "por_dia": daily,
-            "eventos_tipicos": typical_events,
-        }
 
     # ============================================================
     # COMPORTAMIENTO HORARIO
     # ============================================================
 
-    def _hourly_behavior(
-        self,
-        variable: str,
-    ) -> dict[str, dict[str, float | int]]:
-        """
-        Agrupa las lecturas históricas de la variable
-        por hora del día.
-
-        Actualmente utiliza la evidencia de eventos.
-        """
-
-        buckets: dict[
-            int,
-            list[float],
-        ] = defaultdict(list)
-
-        for event in self._events:
-
-            for reading in event.evidencia:
-
-                if (
-                    reading.channel != variable
-                    or reading.value is None
-                    or reading.quality
-                    != DataQuality.VALID
-                ):
-                    continue
-
-                dt = reading.event_time
-
-                if dt.tzinfo is None:
-                    dt = dt.replace(
-                        tzinfo=ZoneInfo("UTC")
-                    )
-
-                local_dt = dt.astimezone(
-                    self.local_tz
-                )
-
-                hour = local_dt.hour
-
-                buckets[hour].append(
-                    float(
-                        reading.value
-                    )
-                )
-
-        result = {}
-
-        for hour, values in sorted(
-            buckets.items()
-        ):
-
-            result[f"{hour:02d}"] = {
-                "n": len(values),
-                "media": mean(values),
-                "desviacion_estandar": (
-                    stdev(values)
-                    if len(values) >= 2
-                    else 0.0
-                ),
-            }
-
-        return result
 
     # ============================================================
     # COMPORTAMIENTO DIARIO
     # ============================================================
 
-    def _daily_behavior(
-        self,
-        variable: str,
-    ) -> dict[str, dict[str, float | int]]:
-        """
-        Agrupa las lecturas por día de la semana.
-
-        Las fechas se convierten a America/Bogota antes
-        de determinar el día.
-        """
-
-        buckets: dict[
-            int,
-            list[float],
-        ] = defaultdict(list)
-
-        for event in self._events:
-
-            for reading in event.evidencia:
-
-                if (
-                    reading.channel != variable
-                    or reading.value is None
-                    or reading.quality
-                    != DataQuality.VALID
-                ):
-                    continue
-
-                dt = reading.event_time
-
-                if dt.tzinfo is None:
-                    dt = dt.replace(
-                        tzinfo=ZoneInfo("UTC")
-                    )
-
-                local_dt = dt.astimezone(
-                    self.local_tz
-                )
-
-                weekday = (
-                    local_dt.weekday()
-                )
-
-                buckets[weekday].append(
-                    float(
-                        reading.value
-                    )
-                )
-
-        result = {}
-
-        day_names = (
-            "lunes",
-            "martes",
-            "miércoles",
-            "jueves",
-            "viernes",
-            "sábado",
-            "domingo",
-        )
-
-        for weekday, values in sorted(
-            buckets.items()
-        ):
-
-            result[
-                day_names[weekday]
-            ] = {
-                "n": len(values),
-                "media": mean(values),
-                "desviacion_estandar": (
-                    stdev(values)
-                    if len(values) >= 2
-                    else 0.0
-                ),
-            }
-
-        return result
 
     # ============================================================
     # EVENTOS TÍPICOS
     # ============================================================
 
-    @staticmethod
-    def _typical_events(
-        events: list[EventCandidate],
-    ) -> list[dict[str, Any]]:
-        """
-        Resume qué patrones aparecen con mayor frecuencia.
-        """
-
-        if not events:
-            return []
-
-        grouped: dict[
-            str,
-            list[EventCandidate],
-        ] = defaultdict(list)
-
-        for event in events:
-
-            grouped[
-                event.patron
-            ].append(
-                event
-            )
-
-        result = []
-
-        for pattern, grouped_events in sorted(
-            grouped.items(),
-            key=lambda item: len(item[1]),
-            reverse=True,
-        ):
-
-            durations = [
-                event.duracion_min
-                for event in grouped_events
-            ]
-
-            result.append(
-                {
-                    "patron": pattern,
-                    "ocurrencias": len(
-                        grouped_events
-                    ),
-                    "duracion_media_min": round(
-                        mean(durations),
-                        2,
-                    ),
-                }
-            )
-
-        return result
 
     # ============================================================
     # RECONSTRUIR EVENTCANDIDATE

@@ -68,81 +68,12 @@ REGLAS GENERALES:
 # FORMATO DE EVENTO
 # ================================================================
 
-EVENT_FORMAT = """
-FORMATO DEL INFORME DE EVENTO:
-
-El informe se envía a Telegram y debe tener como máximo 6 líneas.
-
-Línea 1:
-Indica cuándo ocurrió y qué patrón temporal fue detectado.
-
-Líneas 2-4:
-Explica qué variables cambiaron, cuánto cambiaron y cómo
-se relacionaron, utilizando únicamente los datos disponibles.
-
-Línea 5:
-Indica si el comportamiento volvió o no hacia su comportamiento
-previo, cuando esa información esté disponible.
-
-Línea 6:
-Indica una acción concreta únicamente si la evidencia la justifica.
-Si no se requiere ninguna acción, escribe:
-"Sin acción requerida."
-
-No enumeres lecturas individuales ni timestamps sueltos.
-
-Utiliza el resumen:
-<valor_inicial> → <valor_máximo> → <valor_final>
-
-en lugar de recitar toda la serie temporal.
-"""
-
 
 # ================================================================
 # PROMPT ESPECÍFICO DE EVENTO
 # ================================================================
 
-EVENT_PROMPT = """
-Interpreta el EventCandidate proporcionado.
 
-El patrón indicado por el motor de análisis es una observación
-matemática del comportamiento temporal. No lo conviertas
-automáticamente en una causa física.
-
-Si el patrón detectado es, por ejemplo, una recuperación,
-describe la evolución observada y solamente plantea una posible
-interpretación si existe evidencia suficiente.
-
-Redacta el informe respetando exactamente las reglas generales
-y el formato de evento.
-"""
-
-INCIDENT_PROMPT = """
-Recibes un PAQUETE DE DIAGNÓSTICO ya calculado por la capa
-determinista. NO recalcules la hipótesis. Tu tarea es:
-
-1. Identificar la hipótesis principal calculada. Viene en el
-   contexto como la línea 'hipotesis_principal_calculada: <nombre>'.
-
-2. Redactar el diagnóstico usando SOLO los rasgos y las evidencias
-   que aparecen en el paquete. Cada cifra del informe debe existir
-   literalmente en el contexto.
-
-3. Si el paquete marca 'provisional: si', DEBES empezar el informe
-   con la palabra PROVISIONAL. No afirmes certeza que la capa
-   determinista no afirma.
-
-4. Terminar SIEMPRE con una línea literal:
-
-   hipotesis_principal: <nombre>
-
-   Donde <nombre> es exactamente el valor de
-   'hipotesis_principal_calculada'.
-
-No inventes causas que no aparezcan en las hipótesis del paquete.
-No conviertas correlación en causalidad. No repitas la severidad en
-los hechos.
-"""
 # ================================================================
 # PROMPT DE INFORME PERIÓDICO
 # ================================================================
@@ -481,6 +412,7 @@ class CavaAgent:
     conversations = None
     channel_aliases: dict = {}
     _current_user: str | None = None
+    _dev_override: int | None = None
 
     TOOLS = [
 
@@ -1132,10 +1064,10 @@ class CavaAgent:
         self._clock = clock
         # Callable -> niveles aprendidos por AnomalyDetector (diagnóstico).
         self._levels_provider = levels_provider
-        from pathlib import Path as _P
-        self.alarms_path: _P | None = (_P(alarms_path) if alarms_path else None)
+        self.alarms_path: Path | None = (Path(alarms_path) if alarms_path else None)
         self.registry_provider = registry_provider
-        self._dev: int | None = None
+        # Lugar/dispositivo resuelto para la pregunta en curso (None = el por defecto).
+        self._dev_override: int | None = None
 
 
 
@@ -1153,45 +1085,125 @@ class CavaAgent:
             logger.exception("Fallo obteniendo registry.")
             return None
 
-    def _has_multipower(self) -> bool:
+    def _locations(self) -> list:
+        """Lugares monitorizados (cava, horno...). Sin lugares en el registro, cada instrumento es uno."""
         reg = self._registry()
-        if reg is not None:
-            return bool(reg.by_type("multipower"))
-        return bool(getattr(self, "multipower_present", False))
+        if reg is None:
+            return []
+        locs = getattr(reg, "locations", None)
+        if locs:
+            return [locs[d] for d in sorted(locs)]
+        from types import SimpleNamespace
+        kinds = {"tc900e": "cava", "multipower": "energia"}
+        out = []
+        for d in sorted(getattr(reg, "instruments", {}) or {}):
+            info = reg.instruments[d]
+            out.append(SimpleNamespace(
+                device_id=info.device_id, name=info.name, kind=kinds.get(info.type, "otro"),
+                types=(info.type,), instrument_ids=[info.instrument_id],
+                instrument_names=(info.name,), cooling=info.type == "tc900e",
+                n_channels_effective=getattr(info, "n_channels_effective", 0),
+                instrument_id=info.instrument_id, type=info.type))
+        return out
+
+    def _location(self, device_id):
+        for loc in self._locations():
+            if loc.device_id == device_id:
+                return loc
+        return None
+
+    def _dev(self) -> int:
+        """Lugar/dispositivo sobre el que trabajan las herramientas.
+
+        Orden: el resuelto para la pregunta en curso; el configurado si
+        existe entre los lugares; el primer lugar con informe de frío; el
+        primero. Sin registro (demo), el device_id configurado.
+        """
+        if self._dev_override is not None:
+            return int(self._dev_override)
+        locs = self._locations()
+        if not locs or any(loc.device_id == self.device_id for loc in locs):
+            return self.device_id
+        cooling = [loc.device_id for loc in locs if getattr(loc, "cooling", False)]
+        return cooling[0] if cooling else locs[0].device_id
+
+    # ---------------- ¿hay Multipower? ----------------
+    multipower_present: bool | None = None     # run_reporter puede fijarlo; si es None se deduce
+
+    def _has_multipower(self) -> bool:
+        """True si el lugar actual tiene medidores M1/M2.
+
+        Con registro manda el registro; sin él, el flag `multipower_present`;
+        si tampoco está fijado, se deduce de los canales del store.
+        """
+        locs = self._locations()
+        if locs:
+            loc = self._location(self._dev()) if self._dev_override is not None else None
+            pool = [loc] if loc is not None else locs
+            return any("multipower" in tuple(getattr(x, "types", ())) for x in pool)
+        if self.multipower_present is not None:
+            return bool(self.multipower_present)
+        try:
+            return any(c.startswith(("M1 ", "M2 ")) for c in self.store.channels(device_id=self._dev()))
+        except Exception:
+            return False
 
     def _instrument_summary(self) -> str:
-        reg = self._registry()
-        if reg is None or not reg.instruments:
+        locs = self._locations()
+        if not locs:
             return ""
-        lines = ["INSTRUMENTOS MONITORIZADOS:"]
-        for device_id in reg.device_ids():
-            info = reg.by_device_id(device_id)
-            if info is None:
-                continue
+        lines = ["LUGARES MONITORIZADOS (cada lugar puede agrupar varios instrumentos):"]
+        for loc in locs:
             lines.append(
-                f"- {info.name} (instrument_id={info.instrument_id}, device_id={info.device_id}, "
-                f"tipo={info.type}, {info.n_channels_effective} canales efectivos)"
+                f"- {loc.name} (tipo={loc.kind}, device_id={loc.device_id}, instrumentos: "
+                f"{', '.join(getattr(loc, 'instrument_names', ()) or ())}; "
+                f"{getattr(loc, 'n_channels_effective', 0)} canales efectivos)"
             )
         return "\n".join(lines)
 
     def _resolve_device_for_question(self, q: str) -> int | None:
-        """Resuelve 'cava 1', 'multipower', etc. a un device_id concreto."""
-        reg = self._registry()
-        if reg is None or not reg.instruments:
+        """Resuelve 'cava 1', 'el horno', 'multipower', el nombre de un lugar... a un device_id."""
+        locs = self._locations()
+        if not locs:
             return None
-        m = re.search(r"\b(?:cava|camara|cámara|instrumento|equipo)\s*(\d+)", q)
+        qn = self._norm(q)
+        # 1) Nombre del lugar o de uno de sus instrumentos.
+        best = None
+        for loc in locs:
+            names = [loc.name, *(getattr(loc, "instrument_names", ()) or ())]
+            for name in names:
+                n = self._norm(str(name))
+                if n and len(n) >= 3 and re.search(rf"\b{re.escape(n)}\b", qn):
+                    if best is None or len(n) > best[0]:
+                        best = (len(n), loc.device_id)
+        if best is not None:
+            return best[1]
+        # 2) "cava 2", "horno 1", "instrumento 3": índice dentro del tipo nombrado.
+        m = re.search(r"\b(cava|camara|horno|caldera|lugar|instrumento|equipo)\s*(\d+)", qn)
         if m:
-            idx = int(m.group(1)) - 1
-            device_ids = reg.device_ids()
-            if 0 <= idx < len(device_ids):
-                return device_ids[idx]
-        if "multipower" in q or "medidor" in q:
-            mp = [i.device_id for i in reg.by_type("multipower")]
+            word, idx = m.group(1), int(m.group(2)) - 1
+            if word in ("cava", "camara"):
+                pool = [x for x in locs if getattr(x, "cooling", False) or x.kind == "cava"]
+            elif word in ("horno", "caldera"):
+                pool = [x for x in locs if x.kind == word]
+            else:
+                pool = locs
+            if 0 <= idx < len(pool):
+                return pool[idx].device_id
+        # 3) Tipo de lugar o de instrumento nombrado.
+        if "multipower" in qn or "medidor" in qn or "energia" in qn:
+            mp = [x.device_id for x in locs if "multipower" in tuple(getattr(x, "types", ()))]
             if len(mp) == 1:
                 return mp[0]
-        thermal = [i.device_id for i in reg.by_type("tc900e")]
-        if len(thermal) == 1:
-            return thermal[0]
+        for kind in ("horno", "caldera"):
+            if kind in qn:
+                pool = [x.device_id for x in locs if x.kind == kind]
+                if len(pool) == 1:
+                    return pool[0]
+        # 4) Un único lugar con frío: es "la cava".
+        cooling = [x.device_id for x in locs if getattr(x, "cooling", False)]
+        if len(cooling) == 1:
+            return cooling[0]
         return None
     # ============================================================
     # EVENTO
@@ -1199,7 +1211,6 @@ class CavaAgent:
 
     def _resolve_alarms_path(self):
         """Ruta a sitrad_data/sitrad_alarms.jsonl, independiente del CWD."""
-        from pathlib import Path
         import sys
         if self.alarms_path is not None:
             return self.alarms_path
@@ -1698,7 +1709,7 @@ class CavaAgent:
         if not question or not question.strip():
             return None
         question = question.strip()
-        self._dev = self._resolve_device_for_question(self._norm(question))
+        self._dev_override = self._resolve_device_for_question(self._norm(question))
         routed = self._route_question(question)
         if routed is not None:
             if self.conversations is not None and user_key:
@@ -2130,14 +2141,6 @@ class CavaAgent:
 
     # ---------------- plantillas de respuesta ----------------
 
-    @staticmethod
-    def _render_temperature(r: dict) -> str:
-        """Reservado: hoy nadie lo invoca (status_report cubre «temperatura actual»)."""
-        d = r.get("datos_clave") or {}
-        if "temp_actual_c" not in d:
-            return "No tengo lecturas recientes de Temp Cámara."
-        return (f"Temp Cámara: {d['temp_actual_c']} °C (setpoint {d.get('setpoint_c')} °C, "
-                f"tendencia {d.get('tendencia_c_h')} °C/h).")
 
     @staticmethod
     def _render_relation(r: dict) -> str:
@@ -2181,7 +2184,7 @@ class CavaAgent:
                 f"{v['inicio_local']} → {v['fin_local']}: {v['contexto']}.")
         return "\n".join(lines)
     def _render_instruments(self) -> str:
-        from core.channel_catalog import CONTROLLER_SPECS, SPEC_BY_NAME
+        from core.channel_catalog import SPEC_BY_NAME
         try:
             present = set(self.store.channels(device_id=self._dev()))
         except Exception:
@@ -2769,9 +2772,8 @@ class CavaAgent:
             hist = getattr(self, "episode_history", None)
             if hist is not None:
                 for e in hist.query(t_first, t_last, limit=50):
-                    for key, ha in (("start", "left"), ("end", "right")):
-                        t = self._parse_dt(e[key]).astimezone(tz)
-                        ax.axvline(t, color="gray", ls=":", lw=1)
+                    for key in ("start", "end"):
+                        ax.axvline(self._parse_dt(e[key]).astimezone(tz), color="gray", ls=":", lw=1)
                     ax.text(self._parse_dt(e["start"]).astimezone(tz), ax.get_ylim()[1],
                             str(e.get("kind_label") or e.get("kind"))[:18], rotation=90, va="top", fontsize=7)
         ax.set_title((", ".join(data) if len(data) > 1 else next(iter(data))) +
@@ -3031,36 +3033,6 @@ class CavaAgent:
                 "respuesta_base": (f"Exporté {n} filas de {ch} a {path} (en el equipo del bot; "
                                    "todavía no sé enviar archivos por Telegram).")}
 
-    # ---------------- ¿hay Multipower? ----------------
-    multipower_present: bool | None = None     # run_reporter puede fijarlo; si es None se deduce del store
-def _has_multipower(self) -> bool:
-    reg = self._registry()
-
-    if reg is not None:
-        # Método oficial del registro
-        try:
-            matches = reg.by_type("multipower")
-            if matches:
-                return True
-        except Exception:
-            logger.exception("Error consultando Multipower en registry.")
-
-        # Respaldo: inspeccionar los instrumentos directamente
-        instruments = getattr(reg, "instruments", []) or []
-
-        for instrument in instruments:
-            if isinstance(instrument, dict):
-                instrument_type = instrument.get("type", "")
-            else:
-                instrument_type = getattr(instrument, "type", "")
-
-            if str(instrument_type).strip().lower() == "multipower":
-                return True
-
-        return False
-
-    return bool(getattr(self, "multipower_present", False))
-
     def _tool_data_coverage(self, arguments: dict[str, Any]) -> dict[str, Any]:
         from core.channel_catalog import SPEC_BY_NAME
 
@@ -3231,7 +3203,7 @@ def _has_multipower(self) -> bool:
         from analysis.diagnosis import diagnose
 
         minutes = float(arguments.get("minutos", 360.0) or 360.0)
-        dev = self._dev()
+        dev = int(arguments["device_id"]) if arguments.get("device_id") is not None else self._dev()
         all_series = {
             ch: self.store.get_series(dev, ch, minutes=minutes)
             for ch in self.store.channels(device_id=dev)
@@ -4439,6 +4411,15 @@ def _has_multipower(self) -> bool:
         else:
             return "No encontré convertidores ni instrumentos en SITRAD."
 
+        locs = tree.get("locations") or []
+        if locs:
+            lines.append("Lugares:")
+            for loc in locs:
+                lines.append(f"  · {loc.get('name')} [{loc.get('kind')}"
+                             + (", informe de frío" if loc.get("cooling") else "") + "]: "
+                             + ", ".join(loc.get("instruments") or []))
+            lines.append("Instrumentos:")
+
         if mode == "summary":
             for c in convs:
                 lines.append(f"  · Convertidor {c.get('name')} (id {c.get('id')}, {c.get('status') or '?'})")
@@ -4521,9 +4502,8 @@ def _has_multipower(self) -> bool:
     def _tool_list_converters(self, arguments: dict[str, Any]) -> dict[str, Any]:
         fn = getattr(self, "discovery_provider", None)
         if fn is None:
-            return {"ok": False,
-                    "error": "El descubrimiento de hardware no está disponible "
-                            "(solo en modo sitrad con la fuente SITRAD activa)."}
+            # Sin SITRAD (demo / repetición): se describe lo que hay en el store.
+            return {"ok": True, "respuesta_base": self._render_instruments()}
         refresh = bool(arguments.get("refresh"))
         modo = str(arguments.get("modo") or "full").lower()
         if modo not in ("full", "summary", "list"):

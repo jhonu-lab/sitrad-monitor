@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import mean, median
 from typing import Any
-from core.contracts import ChannelReading, DataQuality
+from core.contracts import DataQuality
 
 try:
     from core.channel_catalog import ALL_SPECS, ROLE_TO_CHANNEL
@@ -76,20 +76,6 @@ BENIGN_HYPOTHESES = frozenset({
 SILENCEABLE_KINDS = frozenset({"out_of_profile", "persistent_drift"})
 # Hipótesis que describen el estado del equipo, no la causa de un incidente: van a bundle.avisos.
 INFORMATIVE_HYPOTHESES = frozenset({"datalogger_lleno"})
-ALARM_TO_HYPOTHESIS = {
-    "IsAlrHighPressure":    ("alta_presion",            0.85, "El controlador reporta alta presión"),
-    "IsAlrLowPressure":     ("baja_presion",            0.85, "El controlador reporta baja presión"),
-    "IsAlrHighTempS1":      ("alarma_temp_alta_controlador", 0.85, "El controlador reporta temperatura alta"),
-    "IsAlrLowTempS1":       ("alarma_temp_baja_controlador", 0.85, "El controlador reporta temperatura baja"),
-    "IsAlrmDoorOpn":        ("puerta_prolongada",       0.85, "El controlador reporta puerta abierta"),
-    "IsDefrTimeOut":        ("deshielo_extendido",      0.95, "El controlador reporta timeout de deshielo"),
-    "IsErrorS1":            ("sensor_error",            0.90, "El controlador reporta error en sonda S1"),
-    "IsErrorS2":            ("sensor_error",            0.90, "El controlador reporta error en sonda S2"),
-    "IsErrorS3":            ("sensor_error",            0.90, "El controlador reporta error en sonda S3"),
-    "IsCompMaxTOn":         ("compresor_racha_maxima",  0.80, "El compresor superó el tiempo máximo ON"),
-    "IsAlarmMaintenance":   ("mantenimiento_pendiente", 0.70, "El controlador pide mantenimiento"),
-    "IsClockDeprogrammed":  ("reloj_desprogramado",     0.70, "El reloj del controlador está desprogramado"),
-}
 
 def is_benign(bundle, incident_kind: str | None = None) -> bool:
     if not bundle.hipotesis or bundle.principal not in BENIGN_HYPOTHESES:

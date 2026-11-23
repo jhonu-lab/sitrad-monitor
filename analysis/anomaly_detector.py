@@ -557,19 +557,6 @@ class AnomalyDetector:
             },
         )
 
-    @staticmethod
-    def _looks_binary(readings: list[ChannelReading]) -> bool:
-        units = {r.unit for r in readings if r.unit}
-        if units == {"estado"}:
-            return True
-        values = [float(r.value) for r in readings if r.value is not None]
-        if not values:
-            return False
-        return all(
-            abs(v) < 1e-9 or abs(v - 1.0) < 1e-9
-            for v in values
-        )
-
 
     @staticmethod
     def _bit_run(readings):

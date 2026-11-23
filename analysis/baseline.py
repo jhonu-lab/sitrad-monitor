@@ -148,6 +148,15 @@ class BehaviorProfile:
         self._fitted_at: datetime | None = None
         self._frozen_classifications: dict[str, str] = {}
 
+        # Reajuste programado: el perfil es comportamiento APRENDIDO (horas
+        # de datos); no cambia en 30 s. Mientras aprende se reajusta seguido
+        # para salir pronto del modo learning; después, cada refit_minutes.
+        self.refit_minutes = float(config.get("profile_refit_minutes", 30.0))
+        self.learning_refit_minutes = float(config.get("profile_learning_refit_minutes", 5.0))
+        self.min_new_readings = int(config.get("profile_min_new_readings", 1))
+        self._new_since_fit = 0
+        self._last_fit_wall: datetime | None = None
+
     # ---------------------------------------------------------
     # INGESTA
     # ---------------------------------------------------------
@@ -158,68 +167,54 @@ class BehaviorProfile:
     def ingest_many(
         self,
         readings: Iterable[ChannelReading],
-    ) -> None:
+    ) -> int:
+        """Ingiere lecturas VALID nuevas (dedup por canal + timestamp). Devuelve cuántas entraron."""
+        touched: set[str] = set()
+        n = 0
         for r in readings:
             if r.value is None or r.quality != DataQuality.VALID:
                 continue
 
             # Dedup por canal + timestamp. Sin esto, reingestar
-            # la ventana de 30 min cada 30 s duplica ~50×.
+            # la ventana de análisis en cada pasada duplica los datos.
             last = self._last_ingested_ts.get(r.channel)
             if last is not None and r.event_time <= last:
                 continue
 
             self._readings[r.channel].append(r)
             self._last_ingested_ts[r.channel] = r.event_time
+            touched.add(r.channel)
+            n += 1
 
             if self._first_ts is None or r.event_time < self._first_ts:
                 self._first_ts = r.event_time
             if self._last_ts is None or r.event_time > self._last_ts:
                 self._last_ts = r.event_time
 
-        # Poda por stride si un canal excede el límite.
-        for channel, readings in self._readings.items():
-            if len(readings) > self.max_readings_per_channel:
-                step = max(
-                    1,
-                    len(readings) // self.max_readings_per_channel,
-                )
-                self._readings[channel] = readings[::step]
+        # Diezmado (1 de cada 2, conservando la última) si un canal excede el límite.
+        for channel in touched:
+            readings_ch = self._readings[channel]
+            if len(readings_ch) > self.max_readings_per_channel:
+                self._readings[channel] = readings_ch[len(readings_ch) - 1::-2][::-1]
 
-    # ---------------------------------------------------------
-    # WARM START
-    # ---------------------------------------------------------
+        self._new_since_fit += n
+        return n
 
-    def warm_start(self, file_log: FileLog) -> int:
+    def warm_start(
+        self,
+        file_log: FileLog,
+        device_id: int | None = None,
+        since: datetime | None = None,
+    ) -> int:
         """
-        Carga observations.jsonl y las ingiere.
-        Devuelve el número de lecturas cargadas.
+        Carga el histórico persistido (vigente + rotados) y lo ingiere en un
+        solo lote. Con device_id, solo las lecturas de ese dispositivo.
+        Devuelve el número de lecturas ingeridas.
         """
         self._frozen_classifications.clear()
-        records = file_log.read_observations()
-        n = 0
-        for rec in records:
-            try:
-                reading = ChannelReading(
-                    device_id=int(rec["device_id"]),
-                    channel=str(rec["channel"]),
-                    value=(
-                        None
-                        if rec.get("value") is None
-                        else float(rec["value"])
-                    ),
-                    unit=str(rec.get("unit", "")),
-                    quality=DataQuality(rec["quality"]),
-                    event_time=datetime.fromisoformat(
-                        rec["event_time"]
-                    ),
-                    raw=str(rec.get("raw", "")),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            self.ingest(reading)
-            n += 1
-        return n
+        if since is None:
+            since = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return self.ingest_many(file_log.iter_observations_since(since, device_id=device_id))
 
     # ---------------------------------------------------------
     # ESTADO
@@ -288,6 +283,20 @@ class BehaviorProfile:
                 
 
         self._fitted_at = self._last_ts
+        self._new_since_fit = 0
+
+    def fit_if_due(self, now: datetime) -> bool:
+        """Reajusta si toca. Devuelve True si reajustó."""
+        if self._new_since_fit < self.min_new_readings and self._last_fit_wall is not None:
+            return False
+        if self._last_fit_wall is not None:
+            every = self.learning_refit_minutes if self.is_learning() else self.refit_minutes
+            if (now - self._last_fit_wall).total_seconds() < every * 60.0:
+                return False
+        self.fit()
+        self._last_fit_wall = now
+        return True
+
     def _compute_flat_streak_p95(
         self,
         readings: list[ChannelReading],
@@ -528,13 +537,6 @@ class BehaviorProfile:
     ) -> TemperatureProfile | None:
         return self._temperature.get(channel)
 
-    def get_baseline(
-        self, channel: str,
-    ) -> Baseline | None:
-        return self._baselines.get(channel)
-
-    def get_recovery(self) -> RecoveryProfile:
-        return self._recovery
 
     # ---------------------------------------------------------
     # SNAPSHOT

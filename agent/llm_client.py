@@ -4,7 +4,7 @@ Cambios implementados:
     - Revisa done_reason == "length" (JSON cortado).
     - Ignora el campo 'thinking' o etiquetas <think> al parsear.
     - Limita num_thread para no asfixiar a Sitrad.
-    - Baja prioridad del proceso (best-effort).
+    - Se recupera solo si Ollama arranca tarde o se cae un rato.
     - Auditoría de cada interacción con el modelo.
     - Tool use: generate_with_tools() con bucle de ejecución de
       herramientas y round-trip contra /api/chat de Ollama.
@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from abc import ABC, abstractmethod
@@ -96,22 +95,6 @@ def _strip_thinking(content: str) -> str:
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def _best_effort_lower_priority() -> None:
-    """Baja la prioridad del proceso si el SO lo permite (best-effort)."""
-    try:
-        if hasattr(os, "nice"):
-            os.nice(5)
-    except Exception:
-        pass
-
-    try:
-        import psutil  # type: ignore
-        p = psutil.Process(os.getpid())
-        p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-    except Exception:
-        pass
 
 
 # ============================================================================
@@ -253,9 +236,16 @@ class OllamaLLM(BaseLLM):
             return False
 
     def _ensure_startup(self) -> bool:
-        if not self._startup_checked:
+        """Comprueba Ollama la primera vez y, si estaba caído, vuelve a probar.
+
+        Antes, un fallo al arrancar (Ollama aún no levantado) o un fallo de red
+        dejaba `_available=False` para siempre. Ahora, mientras el circuit
+        breaker esté cerrado, se reintenta /api/tags; el breaker limita la
+        frecuencia de esos reintentos.
+        """
+        if not self._startup_checked or not self._available:
             return self.check_startup()
-        return self._available
+        return True
 
     # ------------------------------------------------------------------ #
 
@@ -271,8 +261,6 @@ class OllamaLLM(BaseLLM):
 
         if not self._ensure_startup():
             return None
-
-        _best_effort_lower_priority()
 
         options: Dict[str, Any] = {
             "temperature": 0.2,
@@ -395,8 +383,6 @@ class OllamaLLM(BaseLLM):
         if not self._ensure_startup():
             return None
 
-        _best_effort_lower_priority()
-
         options: Dict[str, Any] = {
             "temperature": 0.2,
             "num_ctx": self.num_ctx,
@@ -485,8 +471,6 @@ class OllamaLLM(BaseLLM):
 
         if not self._ensure_startup():
             return None
-
-        _best_effort_lower_priority()
 
         options: Dict[str, Any] = {
             "temperature": 0.2,
@@ -769,6 +753,7 @@ class OllamaLLM(BaseLLM):
                     "content": json.dumps(
                         result,
                         ensure_ascii=False,
+                        default=str,
                     ),
                 })
 

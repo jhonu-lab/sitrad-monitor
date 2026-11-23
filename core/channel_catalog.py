@@ -112,8 +112,6 @@ MULTIPOWER_SPECS = multipower_specs()
 ALL_SPECS = CONTROLLER_SPECS + MULTIPOWER_SPECS
 
 SPEC_BY_NAME = {s.name: s for s in ALL_SPECS}
-COUNTER_CHANNELS = frozenset(s.name for s in ALL_SPECS if s.kind == "counter")
-STATE_CHANNELS = frozenset(s.name for s in ALL_SPECS if s.kind == "state")
 ROLE_TO_CHANNEL = {s.role: s.name for s in ALL_SPECS if s.role}
 
 
@@ -191,3 +189,33 @@ def channel_map_for_type(instrument_type: str) -> dict:
             "Datalogger Ya Sobrescribió": "DataloggerAlreadyOverwrote",
         }
     return {}
+
+# ----------------------------------------------------------------------
+# Canales "catalogados" (conocidos) frente a passthrough
+# ----------------------------------------------------------------------
+# Un lugar puede agrupar varios instrumentos; si dos traen el mismo canal,
+# el segundo se publica como "Canal [Nombre del instrumento]".
+_SUFFIX_RE = re.compile(r"\s+\[[^\]]+\]$")
+
+
+def base_channel(name: str) -> str:
+    """'Temp Cámara [Cava 2]' -> 'Temp Cámara'."""
+    return _SUFFIX_RE.sub("", str(name))
+
+
+def catalog_names(extra=()) -> frozenset:
+    """Nombres canónicos conocidos: catálogo + channel_map por defecto + los que añada el config."""
+    names = set(SPEC_BY_NAME)
+    names.update(channel_map_for_type("tc900e"))
+    names.update(str(x) for x in (extra or ()))
+    return frozenset(names)
+
+
+def make_catalog_predicate(extra=()):
+    """Devuelve f(canal) -> True si el canal es catalogado (no passthrough)."""
+    names = catalog_names(extra)
+
+    def is_catalogued(channel: str) -> bool:
+        return channel in names or base_channel(channel) in names
+
+    return is_catalogued

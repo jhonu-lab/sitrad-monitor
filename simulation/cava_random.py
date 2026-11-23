@@ -354,15 +354,6 @@ class CavaRandomSource:
             self._current_episode and self._current_episode.anomalo
         )
 
-    def set_scenario(self, name: str, sticky: bool = False) -> None:
-        if name not in EPISODE_CATALOG:
-            raise ValueError(
-                f"Episodio desconocido: {name}. "
-                f"Disponibles: {sorted(EPISODE_CATALOG)}"
-            )
-
-        self._forced_episode = name
-        self._sticky_episode = name if sticky else None
 
     @property
     def true_series(self) -> list:
@@ -774,7 +765,7 @@ class CavaRandomSource:
     # ---------------- Eléctrica ----------------
 
     def _power_m1(self, hour: float) -> dict:
-        p, fx, rng = self.p, self._fx, self._rng
+        p, rng = self.p, self._rng
 
         kw = (
             p["m1_base_kw"]
