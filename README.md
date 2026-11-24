@@ -3,7 +3,8 @@
 Sistema de monitoreo y diagnóstico asistido por LLM para instalaciones controladas
 a través de SITRAD PRO: cavas de refrigeración (TC-900E), medidores eléctricos
 (Multipower) y cualquier otro instrumento que SITRAD exponga (hornos, calderas...).
-**Lee, mapea y diagnostica** lo que SITRAD expone; **no escribe** ni controla equipos.
+**Lee, mapea y diagnostica** lo que SITRAD expone; el bot **no escribe** ni controla equipos
+(ver la nota sobre `tools/` en [Seguridad](#seguridad)).
 
 ---
 
@@ -44,6 +45,10 @@ redacta bajo `numeric_anchor_ok` (descarta cifras inventadas) y `strip_fake_medi
 mensajes, el párrafo opcional del informe y el diagnóstico de alarmas van a un hilo
 de trabajo con prioridad de CPU baja (`operations.agent_worker`, activo por defecto).
 
+**Ciclo principal** (cada `polling_seconds`): reintentos de Telegram → ingesta →
+eventos → anomalías → frío y alarmas de SITRAD → salud → latido → resumen de turno →
+preguntas → limpieza programada.
+
 ---
 
 ## Modos
@@ -54,6 +59,9 @@ de trabajo con prioridad de CPU baja (`operations.agent_worker`, activo por defe
 |---|---|---|
 | `sitrad` | API local de SITRAD PRO en vivo | real |
 | `demo` | simulador `cava_random`, repetición de Excel o de JSONL | acelerado (`simulation.speed`) |
+
+En modo `demo`, la llamada al LLM es síncrona: con `simulation.speed` alto y un LLM
+lento se «saltan» minutos simulados de muestreo. Se recomienda `speed` entre 2 y 4.
 
 ---
 
@@ -84,11 +92,17 @@ Multipower que mide su compresor).
 - `sitrad.multi_instrument: false` vuelve al modo de un solo instrumento (`sitrad.instrument_id`).
 
 Si SITRAD no responde al arrancar, el bot reintenta el descubrimiento cada minuto y los
-lugares aparecen solos cuando vuelve.
+lugares aparecen solos cuando vuelve. Los avisos por fallo de lectura solo cuentan como
+racha cuando fallan **todos** los instrumentos.
 
 En el chat: «¿cómo está el horno?», «temperatura de la cava 2», «¿cuánto consume la
-Cava Colanta?» resuelven el lugar por nombre, tipo o número. Los mensajes automáticos
-llevan el nombre del lugar cuando hay más de uno.
+Cava Colanta?» resuelven el lugar por nombre, tipo o número. Si la pregunta es ambigua
+(«la cava» con dos cavas) el bot lo indica en lugar de adivinar. Los mensajes
+automáticos llevan el nombre del lugar cuando hay más de uno.
+
+> **Hipótesis por confirmar:** se asume que M1 mide el circuito de la cava y M2 un
+> circuito independiente. El simulador usa la misma suposición. Confírmela con el
+> ingeniero de la instalación antes de interpretar diagnósticos eléctricos.
 
 ---
 
@@ -107,6 +121,11 @@ llevan el nombre del lugar cuando hay más de uno.
 - **Deshabilitados** (`enabled=false`, el bot los descarta): `Puerta Abierta`
   (requiere `IsOpenDoorEnabled`) y `Temp Evaporador` (requiere `IsS2Enabled`).
 
+**Filtros de calidad antes de guardar una lectura**: temperatura plausible
+(−60 a 150 °C), sensor habilitado en el controlador (`IsS*Enabled`) y deduplicación por
+fecha. Lo descartado se marca `MISSING` y conserva el valor crudo. Un sensor que repite
+el mismo valor 120 lecturas seguidas pasa a `FROZEN`.
+
 **Multipower**: se detecta solo (M1 + M2) y activa las hipótesis eléctricas del lugar al que pertenece.
 
 ---
@@ -122,6 +141,11 @@ llevan el nombre del lugar cuando hay más de uno.
 Las hipótesis se ordenan por evidencia (`a_favor`, `en_contra`, `faltan`). Nunca se
 afirma una causa: «compatible con», «podría estar relacionado con».
 
+El diagnóstico de un incidente abierto se **reevalúa cada 240 s**: si la causa principal
+cambia, se mantiene durante 2 revisiones seguidas y tiene confianza ≥ 0.5, el bot envía
+una actualización. Las hipótesis benignas (operación normal, como un deshielo programado)
+se silencian y no generan alerta.
+
 ---
 
 ## Herramientas del agente
@@ -130,12 +154,41 @@ afirma una causa: «compatible con», «podría estar relacionado con».
 |---|---|
 | **Lectura** | `list_channels`, `list_converters`, `get_stats`, `get_slope`, `get_events`, `correlate`, `energy` |
 | **Estado** | `status_report`, `diagnose_now`, `controller_summary`, `data_coverage`, `data_quality`, `data_quality_canal` |
-| **Historial** | `history_coverage`, `get_episodes`, `episode_summary`, `alarm_history` |
+| **Historial** | `history_coverage`, `get_episodes`, `episode_summary`, `alarm_history`, `historial_usuario` |
 | **Análisis** | `top_variations`, `explain_temperature`, `compressor_relation`, `correlate_with_alarms` |
 | **Predicción** | `forecast_temperature`, `temperature_report`, `load_report` |
 | **Export** | `aggregate`, `export_csv`, `render_chart` (PNG) |
 
-El router determinista resuelve antes del LLM las preguntas habituales.
+El router determinista resuelve antes del LLM las preguntas habituales (alarmas,
+gráficos, cobertura, CSV, agregados, episodios, pronósticos). El LLM no accede
+directamente al almacén ni al motor: solo pide herramientas, y cualquier error de una
+herramienta se devuelve como `{"ok": false, "error": ...}`.
+
+---
+
+## Modelo de lenguaje (Ollama)
+
+`llm.provider` puede ser `ollama` (modelo local), `template` (solo plantillas, **no**
+responde preguntas abiertas) o `demo` (LLM falso con regex, para pruebas).
+
+Para crear el modelo local que usa el bot:
+
+```powershell
+ollama create cava-qwen -f Modelfile
+```
+
+El `Modelfile` parte de `qwen2.5:7b-instruct-q3_K_M` con `temperature 0.1`,
+`num_thread 4` (bajo a propósito, para no competir con la lectura de SITRAD) y
+`num_predict 1024`.
+
+> **Revisar:** `Modelfile` fija `num_ctx 4096` mientras `config.json` pide
+> `llm.num_ctx = 6144`. Alinee ambos valores y recree el modelo si sube el contexto.
+
+- **Circuit breaker**: tras varios fallos seguidos el bot deja de llamar a Ollama durante
+  unos minutos y responde con plantillas.
+- **Arranque tardío**: si Ollama no estaba levantado, el cliente reintenta verificar el
+  modelo y pasa a usarlo solo, sin reiniciar el bot.
+- **Auditoría**: se registran modelo, latencia, tokens y hashes de entrada y salida, no el texto.
 
 ---
 
@@ -145,15 +198,35 @@ El router determinista resuelve antes del LLM las preguntas habituales.
   son los únicos chats desde los que se aceptan preguntas.
 - **Cada respuesta vuelve al chat donde se hizo la pregunta** (texto y gráficos).
 - Los reintentos se hacen por chat: si un chat falla, no se repite el mensaje a los demás.
+  La cola de pendientes está limitada (`max_retries`, por defecto 100 mensajes, aunque el
+  nombre sugiera «reintentos por mensaje»); al llenarse se descartan los más viejos.
 - `telegram.allowed_user_ids` (opcional): lista blanca de usuarios.
 - Token y chat por variable de entorno (recomendado): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
   Si el token estuvo alguna vez en un archivo compartido, revócalo con @BotFather.
+
+**Comandos**
+
+| Comando | Qué hace |
+|---|---|
+| `/start`, `/help`, `/ayuda` | Muestra la ayuda con ejemplos |
+| `/preguntar`, `/ask`, `/p` + texto | Hace una pregunta |
+| `/historial` | Muestra las últimas preguntas y respuestas de quien lo escribe |
+| `/olvidar` | Borra la memoria de conversación de quien lo escribe |
+
+En un chat privado basta escribir la pregunta. **En grupos** el bot solo responde si lo
+mencionan (`@bot`), si responden a un mensaje suyo o si usan un comando; así no
+contesta la conversación normal. La memoria de conversación es por usuario
+(`chat_id:user_id`).
+
+**Mensajes largos** (más de 4000 caracteres) se dividen y se numeran (1/n, 2/n...).
 
 ---
 
 ## Alarmas de SITRAD
 
 - **Captura**: `GET /alarms` cada `sitrad.alarms_every_seconds` (ventana de 15 min).
+  La primera consulta solo «prepara» y no anuncia alarmas ya existentes, salvo que
+  `announce_existing_alarms` esté activo.
 - **Persistencia**: `sitrad_data/sitrad_alarms.jsonl` (junto al programa).
 - **Chat**: se reenvían con el lugar, la hora, el texto y la temperatura del lugar;
   si es de temperatura, con el diagnóstico de ESE lugar.
@@ -167,7 +240,9 @@ El router determinista resuelve antes del LLM las preguntas habituales.
   `storage.passthrough_max_hours` (24 h) para el resto.
 - **Persistencia**: `logs/observations.jsonl`; con `operations.rotation.mode: "daily"`
   se rota a `observations.AAAAMMDD.jsonl` al cambiar el día local (también tras reiniciar).
-- **Replay al arrancar** (modo sitrad): se lee en streaming solo lo posterior al corte.
+- **Replay al arrancar** (modo sitrad): se lee en streaming solo lo posterior al corte. El
+  replay **no** pasa por el motor de eventos ni por el informe de frío, para no reenviar
+  alertas de días pasados.
 - **Limpieza programada** (`storage.retention`): una vez al día a la hora local
   `run_at_hour_local` (03:00 por defecto) y al arrancar si quedó pendiente. Recorta los
   JSONL por antigüedad, borra rotados viejos, gráficos y exportaciones, y opcionalmente
@@ -189,12 +264,21 @@ El router determinista resuelve antes del LLM las preguntas habituales.
 
 ## Seguridad
 
-- **Solo lectura** contra SITRAD (`GET`). No manda comandos a ningún equipo.
+- **El bot es de solo lectura** contra SITRAD (`GET`). No manda comandos a ningún equipo.
 - **LLM local** (Ollama). Fuera de la máquina solo sale Telegram.
-- **Sin `exec`/`eval`/`subprocess`**.
+- **Sin `exec`/`eval`/`subprocess`** en el bot.
 - **`RedactTokens`** oculta el token de Telegram en mensajes **y tracebacks** de los logs.
 - **Credenciales por variable de entorno**: `SITRAD_USER`, `SITRAD_PASSWORD`, `TELEGRAM_BOT_TOKEN`.
+  No escriba el token en `config.json`; si ya estuvo ahí, revóquelo y genere uno nuevo.
 - **`verify_ssl=false`** por defecto (certificado autofirmado local).
+
+> **Excepciones en `tools/`.** La garantía de solo lectura vale para el bot
+> (`run_reporter.py`), no para todos los scripts de `tools/`:
+> `fix_sitrad_db.py` modifica la base de datos de SITRAD, `force_poll.py` reinicia su
+> servicio de Windows y `hack_sitrad_api.py` envía `DELETE` y `POST` a la API. Úselos solo
+> de forma manual, con SITRAD detenido o con copia de seguridad. Además,
+> `inspect_api_network.py`, `scan_gui_api.py` y `hack_sitrad_api.py` traen credenciales de
+> prueba (`admin/admin12`) escritas en el código; cámbielas o muévalas a variables de entorno.
 
 ---
 
@@ -206,6 +290,14 @@ $env:SITRAD_USER = "admin"
 $env:SITRAD_PASSWORD = ""
 $env:TELEGRAM_BOT_TOKEN = "<token>"
 python run_reporter.py --mode sitrad
+```
+
+Opciones de inspección (no arrancan el bot):
+
+```powershell
+python run_reporter.py --inspect-api                    # qué devuelve SITRAD y cómo se mapea
+python run_reporter.py --inspect-excel ruta.xlsx        # qué instrumento y canales trae un Excel
+python run_reporter.py --inspect-excel ruta.xlsx --output informe.json
 ```
 
 Al arrancar, en los logs:
@@ -249,22 +341,44 @@ sitrad-monitor/
 ├── run_reporter.py            # punto de entrada
 ├── config.json                # configuración local (no se versiona)
 ├── config.example.json        # plantilla sin secretos
+├── products.json              # cargas de producto en cámara
+├── Modelfile                  # receta del modelo Ollama (cava-qwen)
+├── requirements.txt           # requests, urllib3, pandas, openpyxl, matplotlib, pytest
+├── pyproject.toml             # configuración de pytest
 ├── agent/                     # CavaAgent, cliente LLM, renderer
 ├── analysis/                  # módulos deterministas
 ├── core/                      # contracts, series_store, reporter, worker, retention, policy, file_log
 ├── sources/                   # sitrad_api (cliente, descubrimiento, lugares, passthrough)
 ├── notifiers/                 # Telegram, consola, reintentos
 ├── simulation/                # simuladores y repetición
-├── tools/                     # inspect_sitrad_api, inspect_excel, smoke_reporter, mock_sitrad_server...
-└── tests/                     # 70 tests
+├── tools/                     # scripts de validación, inspección y mantenimiento (ver abajo)
+└── tests/                     # pruebas automáticas con pytest
 ```
+
+---
+
+## Herramientas de línea de comandos (`tools/`)
+
+Ninguna forma parte del ciclo normal del bot. Se ejecutan a mano.
+
+| Propósito | Scripts |
+|---|---|
+| Validar que el diagnóstico acierta | `run_validation.py`, `case_report.py`, `run_multiseed.py`, `feedback_report.py`, `label_case.py` |
+| Comprobar el código | `verify_python.py`, `smoke_reporter.py`, `scan_unused.py`, `find_duplicates.py` |
+| Entender los datos de SITRAD | `audit_real_data.py`, `inspect_excel.py`, `check_excel.py`, `sitrad_excel.py`, `demo_informe.py` |
+| Explorar la API (solo lectura) | `inspect_sitrad_api.py`, `diagnose_sitrad.py`, `inspect_api_network.py`, `find_swagger.py`, `scan_gui_api.py` |
+| Probar sin SITRAD | `mock_sitrad_server.py` |
+| **Reparar SITRAD (modifican algo)** | `find_sitrad_db.py`, `inspect_sitrad_db.py` (solo lectura), `fix_sitrad_db.py`, `force_poll.py`, `hack_sitrad_api.py` |
+
+`TO_TEST.md` (en la raíz y en `tools/`) es un checklist manual de pruebas pendientes,
+no código.
 
 ---
 
 ## Verificación
 
 ```powershell
-python -m pytest tests -q                          # 70 verdes
+python -m pytest tests -q                          # pruebas automáticas
 python tools/scan_unused.py --entry run_reporter   # 0 huérfanos
 python tools/verify_python.py                      # imports OK
 python tools/smoke_reporter.py --hours 6           # ciclo completo con simulador
@@ -278,6 +392,23 @@ python tools/mock_sitrad_server.py --excel exceles/controlador.xlsx --port 8099 
 python run_reporter.py --mode sitrad
 ```
 
+### ¿Acierta el diagnóstico?
+
+El simulador `cava_random` genera fallas con causa conocida (`logs/sim_truth.jsonl`) y
+el bot las diagnostica sin saberlo. Luego se comparan:
+
+```powershell
+python tools/run_validation.py --days 4          # simula y escribe logs/cases.jsonl
+python tools/case_report.py                      # acierto, falsas alarmas, matriz de confusión
+python tools/run_multiseed.py                  # repite con varias semillas y agrega
+python tools/feedback_report.py                  # acierto según las correcciones del ingeniero
+python tools/label_case.py --list                # etiquetar a mano la causa real de un caso
+```
+
+> Las opciones exactas de cada script (`--days`, `--seeds`, `--warmup-h`, `--target`...)
+> están en su `--help`. Las métricas que se citen en informes o artículos deben salir de
+> estas ejecuciones, no de valores estimados.
+
 ---
 
 ## Limitaciones conocidas
@@ -289,3 +420,7 @@ python run_reporter.py --mode sitrad
 3. **Puerta y evaporador deshabilitados** en el TC-900E actual.
 4. **Datalogger de SITRAD no expuesto por API**: el bot reconstruye solo lo que grabó.
 5. **`cooling.llm_analysis`** apagado por defecto (párrafo del LLM sobre el informe).
+6. **Aprendizaje del diagnóstico**: `feedback_log` solo registra las correcciones del
+   ingeniero; todavía no modifican el comportamiento del bot.
+7. **Evaluación cuantitativa con simulador**: hay pocos datos reales etiquetados para
+   intervalos de confianza ajustados.
