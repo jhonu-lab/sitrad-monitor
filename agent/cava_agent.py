@@ -1727,6 +1727,17 @@ class CavaAgent:
                 device_id=self._dev()
             )
 
+            # NUEVO: Si SITRAD está inactivo y no hay canales, evitamos que el LLM entre en bucle
+            if not known:
+                system = (
+                    BASE_PROMPT + "\n" + QUESTION_PROMPT + "\n\n"
+                    "CRITICAL: SITRAD no está entregando datos (Instrument not active). "
+                    "NO LLAMES a la herramienta 'list_channels'. "
+                    "Responde directamente al usuario diciendo que el sistema SITRAD no está entregando datos "
+                    "en este momento y que debe verificar la conexión del instrumento en la interfaz gráfica."
+                )
+                return self.llm.generate_text(system=system, user=question)
+
             if known:
                 channels_line = (
                     "Canales disponibles: "
@@ -1946,6 +1957,11 @@ class CavaAgent:
                 r = self._execute_tool("aggregate", {"canal": chs[0], "desde": a0.isoformat(), "hasta": a1.isoformat(),
                                                      "agg": agg, "group_by": grp})
                 return r.get("respuesta_base") or r.get("error")
+            if has("locacion", "locaciones", "lugar", "lugares", "zonas", "ubicacion", "ubicaciones"):
+                txt = self._instrument_summary()
+                if not txt:
+                    txt = "No tengo lugares (locaciones) configurados o descubiertos todavía."
+                return txt
             if has("episodios"):
                 a0, a1 = (rng[0], rng[1]) if rng else (
                     (now_utc - timedelta(days=7), now_utc) if has("semana") else (now_utc - timedelta(hours=24), now_utc))

@@ -244,7 +244,22 @@ class SitradApi:
         return list(self.get_json("/instruments").get("results", []))
 
     def values(self, instrument_id) -> object:
-        return self.get_json(f"/instruments/{instrument_id}/values").get("results", [])
+        try:
+            # 1. Intento normal
+            return self.get_json(f"/instruments/{instrument_id}/values").get("results", [])
+        except Exception as e:
+            logger.debug("Lectura normal falló para %s (%s). Intentando forzar lectura...", instrument_id, e)
+            # 2. Bypass: a veces SITRAD acepta parámetros extra para ignorar el estado inactivo
+            for param in ["?ignoreStatus=true", "?includeInactive=true", "?force=true"]:
+                try:
+                    logger.info("Intentando bypass con: %s", param)
+                    res = self.get_json(f"/instruments/{instrument_id}/values{param}").get("results", [])
+                    logger.info("¡Bypass exitoso con %s!", param)
+                    return res
+                except Exception:
+                    continue
+            # Si todo falla, propagamos el error original
+            raise e
 
     def alarms(self, start: datetime, end: datetime) -> list[dict]:
         fmt = "%Y-%m-%dT%H:%M:%SZ"
@@ -895,12 +910,16 @@ class SitradApiSource:
         if self.registry is not None and self.registry.instruments:
             return self._poll_multi(now)
         return self._poll_single(now)
-
     def _poll_single(self, now: datetime) -> Snapshot:
         empty = Snapshot(source_id="sitrad_api", processing_time=now, readings=())
         try:
             if self.instrument_id is None:
                 self.discover()
+            
+            # NUEVO: Si después de descubrir sigue siendo None, abortamos
+            if self.instrument_id is None:
+                return empty
+                
             results = self.api.values(self.instrument_id)
         except Exception as exc:
             self._fail_streak += 1
